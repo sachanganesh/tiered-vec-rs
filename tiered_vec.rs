@@ -9,19 +9,19 @@ use super::tier::{Tier, TierError};
 
 pub type TieredVecIndex = usize;
 
-pub struct TieredVec<T, const N: usize> {
+pub struct TieredVec<T> {
     pub(crate) max_tier_size: usize,
-    pub(crate) tiers: Vec<Tier<T, N>>,
+    pub(crate) tiers: Vec<Tier<T>>,
 }
 
-impl<T, const N: usize> TieredVec<T, N>
+impl<T> TieredVec<T>
 where
     T: Clone + Debug + Send + Sync + 'static,
 {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(initial_capacity: usize) -> Self {
         Self {
-            max_tier_size: N,
-            tiers: Vec::with_capacity(N),
+            max_tier_size: initial_capacity,
+            tiers: Vec::with_capacity(initial_capacity),
         }
     }
 
@@ -53,7 +53,7 @@ where
     }
 
     pub(crate) fn add_tier_and_insert(&mut self, data: T) {
-        let mut tier = Tier::new();
+        let mut tier = Tier::new(self.max_tier_size);
         tier.push_back(data)
             .expect("new tier did not accept elements");
 

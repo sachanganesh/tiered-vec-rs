@@ -24,64 +24,57 @@ where
     // TierMultipleInsertionError(Vec<T>),
 }
 
-pub struct Tier<T, const N: usize> {
-    inner: CachePadded<RawTier<T, N>>,
+#[repr(transparent)]
+pub struct Tier<T> {
+    inner: CachePadded<RawTier<T>>,
 }
 
-impl<T, const N: usize> Tier<T, N>
+impl<T> Tier<T>
 where
     T: Clone + Debug + Send + Sync + 'static,
 {
-    pub fn new() -> Self {
+    pub fn new(initial_capacity: usize) -> Self {
         Self {
-            inner: CachePadded::new(RawTier::new()),
+            inner: CachePadded::new(RawTier::new(initial_capacity)),
         }
     }
 }
 
-impl<T, const N: usize> Deref for Tier<T, N> {
-    type Target = RawTier<T, N>;
+impl<T> Deref for Tier<T> {
+    type Target = RawTier<T>;
 
     fn deref(&self) -> &Self::Target {
         self.inner.deref()
     }
 }
 
-impl<T, const N: usize> DerefMut for Tier<T, N> {
+impl<T> DerefMut for Tier<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.inner.deref_mut()
     }
 }
 
 // #[repr(align(64))]
-pub struct RawTier<T, const N: usize> {
-    pub(crate) arr: [MaybeUninit<T>; N],
+pub struct RawTier<T> {
+    pub(crate) arr: Box<[MaybeUninit<T>]>,
     pub(crate) head: usize,
     pub(crate) tail: usize,
 }
 
-impl<T, const N: usize> RawTier<T, N>
+impl<T> RawTier<T>
 where
     T: Clone + Debug + Send + Sync + 'static,
 {
-    pub(crate) fn new() -> Self {
-        // let mut arr = Vec::with_capacity(max_size);
-        // arr.resize_with(max_size, || None::<T>);
-        // let arr = Box::from_raw(Box::into_raw(Vec::with_capacity(max_size).into_boxed_slice()) as *mut [Option<T>; max_size])
+    pub(crate) fn new(capacity: usize) -> Self {
+        assert!(capacity.is_power_of_two());
 
-        // assert!(capacity.is_power_of_two());
-        // let mut vec = Vec::with_capacity(capacity);
-        // unsafe {
-        //     vec.set_len(capacity);
-        // }
-        // let arr = vec.into_boxed_slice();
-
-        assert!(N.is_power_of_two());
-        let arr: [MaybeUninit<T>; N] = unsafe { MaybeUninit::uninit().assume_init() };
-        // let arr = vec.into_boxed_slice();
+        let mut vec = Vec::with_capacity(capacity);
+        unsafe {
+            vec.set_len(capacity);
+        }
 
         Self {
-            arr,
+            arr: vec.into_boxed_slice(),
             head: 0,
             tail: 0,
         }
@@ -215,17 +208,17 @@ mod tests {
     #[test]
     #[should_panic]
     fn error_on_wrong_tier_size() {
-        let _t: Tier<usize, 5> = Tier::new();
+        let _t: Tier<usize> = Tier::new(5);
     }
 
     #[test]
     fn no_error_on_correct_tier_size() {
-        let _t: Tier<usize, 4> = Tier::new();
+        let _t: Tier<usize> = Tier::new(4);
     }
 
     #[test]
     fn push_and_pop() {
-        let mut t: Tier<usize, 4> = Tier::new();
+        let mut t: Tier<usize> = Tier::new(4);
         assert!(t.is_empty());
         assert!(!t.is_full());
         assert_eq!(t.len(), 0);
