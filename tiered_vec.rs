@@ -9,19 +9,19 @@ use super::tier::{Tier, TierError};
 
 pub type TieredVecIndex = usize;
 
-pub struct TieredVec<T> {
+pub struct TieredVec<T, const N: usize> {
     pub(crate) max_tier_size: usize,
-    pub(crate) tiers: Vec<Box<Tier<T>>>,
+    pub(crate) tiers: Vec<Tier<T, N>>,
 }
 
-impl<T> TieredVec<T>
+impl<T, const N: usize> TieredVec<T, N>
 where
-    T: Debug + Send + Sync + 'static,
+    T: Clone + Debug + Send + Sync + 'static,
 {
-    pub(crate) fn new(max_tier_size: usize) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            max_tier_size,
-            tiers: Vec::with_capacity(max_tier_size),
+            max_tier_size: N,
+            tiers: Vec::with_capacity(N),
         }
     }
 
@@ -53,15 +53,16 @@ where
     }
 
     pub(crate) fn add_tier_and_insert(&mut self, data: T) {
-        let mut tier = Tier::new(self.max_tier_size);
-        tier.push(data).expect("new tier did not accept elements");
+        let mut tier = Tier::new();
+        tier.push_back(data)
+            .expect("new tier did not accept elements");
 
-        self.tiers.push(Box::new(tier));
+        self.tiers.push(tier);
     }
 
     pub fn push(&mut self, data: T) -> TieredVecIndex {
         if let Some(tier) = self.tiers.last_mut() {
-            match tier.push(data) {
+            match tier.push_back(data) {
                 Ok(idx) => {
                     return (self.tiers.len() * self.max_tier_size) + idx;
                 }
@@ -70,7 +71,7 @@ where
                     self.add_tier_and_insert(data);
                 }
 
-                Err(TierError::TierMultipleInsertionError(_)) => todo!(),
+                _ => todo!(),
             }
         } else {
             self.add_tier_and_insert(data);
