@@ -21,9 +21,9 @@ where
 
     #[error("tier is empty and no element can be removed")]
     TierEmptyError,
-    //
-    // #[error("the provided index is out of bounds")]
-    // TierIndexOutOfBoundsError(usize),
+
+    #[error("the provided index is out of bounds")]
+    TierIndexOutOfBoundsError(usize),
     //
     // #[error("tier is full and at least some elements cannot be inserted")]
     // TierMultipleInsertionError(Vec<T>),
@@ -142,6 +142,11 @@ where
         self.mask(self.tail)
     }
 
+    #[inline]
+    const fn masked_rank(&self, rank: usize) -> usize {
+        self.mask(self.head.wrapping_add(rank))
+    }
+
     const fn has_previously_been_written_to(&self, idx: usize) -> bool {
         let rel_idx = self.mask(self.head.wrapping_add(idx));
         return rel_idx < self.tail;
@@ -160,7 +165,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn is_valid_masked_index(&self, masked_idx: usize) -> bool {
+    pub(crate) const fn is_valid_masked_index(&self, masked_idx: usize) -> bool {
         // passed idx should be already masked
         // let masked_head = self.masked_head();
         // let masked_tail = self.masked_tail();
@@ -179,7 +184,7 @@ where
     }
 
     pub const fn contains_rank(&self, rank: usize) -> bool {
-        self.contains_masked_rank(self.mask(self.head.wrapping_add(rank)))
+        self.contains_masked_rank(self.masked_rank(rank))
     }
 
     pub fn get(&self, idx: usize) -> Option<&T> {
@@ -280,26 +285,22 @@ where
         let mut cursor: Option<T> = None;
         let mut i = from;
 
-        let mut masked_head = self.masked_head();
+        self.head_backward();
 
-        while i > masked_head {
+        while i != self.masked_head() {
             if let Some(curr_elem) = cursor {
-                cursor = Some(self.replace(i, curr_elem));
+                let elem = self.replace(i, curr_elem);
+                cursor = Some(elem);
             } else {
-                cursor = Some(self.take(i));
+                let elem = self.take(i);
+                cursor = Some(elem);
             }
 
             i = self.mask(i.wrapping_sub(1));
         }
 
-        self.head_backward();
-        masked_head = self.masked_head();
-
         if let Some(curr_elem) = cursor {
             self.set(i, curr_elem);
-        } else {
-            let curr_elem = self.take(i);
-            self.replace(masked_head, curr_elem);
         }
     }
 
@@ -320,7 +321,6 @@ where
 
         if let Some(curr_elem) = cursor {
             self.set(i, curr_elem);
-
             self.tail_forward();
         }
     }
@@ -328,9 +328,9 @@ where
     pub fn insert_at_rank(&mut self, rank: usize, elem: T) -> Result<usize, TierError<T>> {
         let masked_head = self.masked_head();
         let masked_tail = self.masked_tail();
-        let masked_rank = self.mask(rank);
+        let masked_rank = self.masked_rank(rank);
 
-        if !self.contains_rank(rank) {
+        if !self.contains_masked_rank(masked_rank) {
             // if no element at rank, insert
             return if masked_head == masked_rank {
                 self.push_front(elem)
@@ -357,36 +357,46 @@ where
         }
     }
 
-    // pub(crate) fn replace(&mut self, elem: T, idx: usize) -> Option<T> {
-    //     let replaced = std::mem::replace(&mut self.arr[self.tail_idx], Some(elem));
-    //     self.tail_idx += 1;
+    fn close_gap(&mut self, gap_masked_idx: usize) {
+        let mut cursor = None;
 
-    //     if replaced.is_some() {
-    //         self.tombstones -= 1;
-    //     }
+        self.tail_backward();
+        let mut i = self.masked_tail();
 
-    //     return replaced;
-    // }
+        while i > gap_masked_idx {
+            if let Some(elem) = cursor {
+                cursor = Some(self.replace(i, elem));
+            } else {
+                cursor = Some(self.take(i));
+            }
 
-    // pub fn insert_at(&mut self, elem: T, idx: usize) -> Result<(), TierError<T>> {
-    //     if !self.is_full() && idx < self.arr.len() {
-    //         self.arr[0] = Some(elem);
-    //         Ok(())
-    //     } else {
-    //         Err(TierError::TierInsertionError(elem).into())
-    //     }
-    // }
+            i = self.mask(i.wrapping_sub(1));
+        }
 
-    // pub fn insert_vec_at<U>(&mut self, elems: &Vec<T>, idx: usize) -> Result<(), TierError<T>> where T: Clone {
-    //     if !self.is_full() && idx < self.arr.len() && (self.arr.len() - self.capacity()) >= 1 {
-    //         for elem in elems.clone_from_slice() {
-    //             self.arr[idx] = Some(elem);
-    //         }
-    //         Ok(())
-    //     } else {
-    //         Err(TierError::TierInsertionError(elem).into())
-    //     }
-    // }
+        if let Some(elem) = cursor {
+            self.set(i, elem);
+        }
+    }
+
+    pub fn remove_at_rank(&mut self, rank: usize) -> Result<T, TierError<T>> {
+        let masked_rank = self.masked_rank(rank);
+
+        if self.contains_masked_rank(masked_rank) {
+            let elem = self.take(masked_rank);
+
+            if masked_rank == self.masked_head() {
+                self.head_forward();
+            } else if masked_rank == self.masked_tail() {
+                self.tail_backward();
+            } else {
+                self.close_gap(masked_rank);
+            }
+
+            Ok(elem)
+        } else {
+            Err(TierError::TierIndexOutOfBoundsError(rank))
+        }
+    }
 }
 
 impl<T: Clone + Debug + Send + Sync + 'static> Debug for RawTier<T> {
@@ -461,6 +471,51 @@ mod tests {
         assert_eq!(*t.get(1).unwrap(), 1);
         assert_eq!(*t.get(2).unwrap(), 3);
         assert_eq!(*t.get(3).unwrap(), 2);
+    }
+
+    #[test]
+    fn remove_at_rank_1() {
+        let mut t = Tier::new(4);
+
+        // [0, 1, 2, 3]
+        assert!(t.push_back(0).is_ok());
+        assert!(t.push_back(1).is_ok());
+        assert!(t.push_back(2).is_ok());
+        assert!(t.push_back(3).is_ok());
+        assert_eq!(t.masked_head(), 0);
+        assert_eq!(t.masked_tail(), 0);
+
+        // [0, 2, 3, _]
+        assert!(t.remove_at_rank(1).is_ok());
+        assert_eq!(t.masked_head(), 0);
+        assert_eq!(t.masked_tail(), 3);
+        assert_eq!(*t.get(0).unwrap(), 0);
+        assert_eq!(*t.get(1).unwrap(), 2);
+        assert_eq!(*t.get(2).unwrap(), 3);
+        assert!(t.get(3).is_none());
+    }
+
+    #[test]
+    fn remove_at_rank_2() {
+        let mut t = Tier::new(4);
+
+        // [0, 1, 2, 3]
+        assert!(t.push_back(0).is_ok());
+        assert!(t.push_back(1).is_ok());
+        assert!(t.push_back(2).is_ok());
+        assert!(t.push_back(3).is_ok());
+        assert_eq!(t.masked_head(), 0);
+        assert_eq!(t.masked_tail(), 0);
+
+        // [_, 1, 2, 3]
+        assert!(t.remove_at_rank(0).is_ok());
+        println!("{:?}", t);
+        assert_eq!(t.masked_head(), 1);
+        assert_eq!(t.masked_tail(), 0);
+        assert!(t.get(0).is_none());
+        assert_eq!(*t.get(1).unwrap(), 1);
+        assert_eq!(*t.get(2).unwrap(), 2);
+        assert_eq!(*t.get(3).unwrap(), 3);
     }
 
     #[test]
@@ -589,9 +644,11 @@ mod tests {
         assert!(t.push_back(0).is_ok());
         assert!(t.push_back(1).is_ok());
         assert!(t.push_back(2).is_ok());
+        println!("{:?}", t);
 
         // [1, 2, n, 0]
         t.shift_to_head(2);
+        println!("{:?}", t);
         assert_eq!(*t.get(0).unwrap(), 1);
         assert_eq!(*t.get(1).unwrap(), 2);
         assert_ne!(*t.get(2).unwrap(), 2);

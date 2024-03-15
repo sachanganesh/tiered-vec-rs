@@ -29,10 +29,6 @@ where
         idx / self.tier_size
     }
 
-    // pub(crate) const fn tier_internal_index(&self, idx: TieredVecIndex) -> usize {
-    //     idx % self.tier_size
-    // }
-
     pub fn get_by_rank(&self, rank: usize) -> Option<&T> {
         self.tiers.get(self.tier_index(rank))?.get_by_rank(rank)
     }
@@ -43,18 +39,13 @@ where
         self.tiers.get_mut(tier_idx)?.get_mut_by_rank(rank)
     }
 
-    fn pop_push(&mut self, tier: &mut Tier<T>, elem: T) {}
-
     fn insert(&mut self, rank: usize, elem: T) {
         let tier_idx = self.tier_index(rank);
         let mut prev_popped = None;
 
         // pop-push phase
         for i in tier_idx..self.tier_size {
-            let tier = self
-                .tiers
-                .get_mut(tier_idx)
-                .expect("tier at index does not exist");
+            let tier = self.tiers.get_mut(i).expect("tier at index does not exist");
 
             if let Ok(popped) = tier.pop_back() {
                 if let Some(prev_elem) = prev_popped {
@@ -69,7 +60,12 @@ where
         }
 
         // shift phase
-        
+        let tier = self
+            .tiers
+            .get_mut(tier_idx)
+            .expect("tier at index does not exist");
+        tier.insert_at_rank(rank, elem)
+            .expect("could not insert into tier at rank");
     }
 
     // pub fn get(&self, idx: TieredVecIndex) -> Option<&T> {
