@@ -1,8 +1,5 @@
 use anyhow::Result;
-use std::{
-    fmt::Debug,
-    ops::{Deref, DerefMut},
-};
+use std::fmt::Debug;
 use thiserror::Error;
 
 use super::tier::{Tier, TierError};
@@ -29,6 +26,36 @@ where
         idx / self.tier_size
     }
 
+    pub fn capacity(&self) -> usize {
+        self.tier_size * self.tiers.len()
+    }
+
+    pub fn len(&self) -> usize {
+        let mut l = 0;
+        for t in &self.tiers {
+            let curr_len = t.len();
+
+            if curr_len == 0 {
+                return l;
+            }
+
+            l += curr_len;
+        }
+
+        return l;
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tiers
+            .get(0)
+            .expect("first tier is not initialized")
+            .is_empty()
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.len() == self.capacity()
+    }
+
     pub fn get_by_rank(&self, rank: usize) -> Option<&T> {
         self.tiers.get(self.tier_index(rank))?.get_by_rank(rank)
     }
@@ -39,12 +66,44 @@ where
         self.tiers.get_mut(tier_idx)?.get_mut_by_rank(rank)
     }
 
+    fn expand(&mut self) {
+        let new_tier_size = self.tier_size * 2;
+        let mut new_tiers = Vec::with_capacity(new_tier_size);
+
+        for i in 0..new_tier_size {
+            let mut new_tier = Tier::new(new_tier_size);
+            let old_tier_idx = i * 2;
+
+            for j in old_tier_idx..old_tier_idx + 2 {
+                let old_tier = self
+                    .tiers
+                    .get_mut(j)
+                    .expect("tier does not exist at old index");
+                while let Ok(elem) = old_tier.pop_front() {
+                    new_tier
+                        .push_back(elem)
+                        .expect("new tier does not have enough space");
+                }
+            }
+
+            new_tiers.push(new_tier);
+        }
+
+        self.tier_size = new_tier_size;
+        self.tiers = new_tiers;
+    }
+
     fn insert(&mut self, rank: usize, elem: T) {
+        if self.is_full() {
+            self.expand();
+        }
+
         let tier_idx = self.tier_index(rank);
+        let last_tier_idx = self.tier_index(self.len());
         let mut prev_popped = None;
 
         // pop-push phase
-        for i in tier_idx..self.tier_size {
+        for i in tier_idx..last_tier_idx + 1 {
             let tier = self.tiers.get_mut(i).expect("tier at index does not exist");
 
             if let Ok(popped) = tier.pop_back() {
@@ -54,8 +113,6 @@ where
                 }
 
                 prev_popped = Some(popped);
-            } else {
-                break;
             }
         }
 
@@ -68,50 +125,34 @@ where
             .expect("could not insert into tier at rank");
     }
 
-    // pub fn get(&self, idx: TieredVecIndex) -> Option<&T> {
-    //     if let Some(tier) = self.tiers.get(self.tier_index(idx)) {
-    //         return tier.deref().get(self.tier_internal_index(idx));
-    //     }
+    fn remove(&mut self, rank: usize) -> Option<T> {
+        let tier_idx = self.tier_index(rank);
+        let last_tier_idx = self.tier_index(self.len());
+        let mut prev_popped = None;
 
-    //     None
-    // }
+        // shift phase
+        if let Some(tier) = self.tiers.get_mut(tier_idx) {
+            if let Ok(removed) = tier.remove_at_rank(rank) {
+                // pop-push phase
+                for i in (tier_idx..last_tier_idx + 1).rev() {
+                    let tier = self.tiers.get_mut(i).expect("tier at index does not exist");
 
-    // pub fn get_mut(&mut self, idx: TieredVecIndex) -> Option<&mut T> {
-    //     let t_idx = self.tier_index(idx);
-    //     let i_idx = self.tier_internal_index(idx);
+                    if let Ok(popped) = tier.pop_back() {
+                        if let Some(prev_elem) = prev_popped {
+                            tier.push_front(prev_elem)
+                                .expect("tier did not have space despite prior call to `pop_back`");
+                        }
 
-    //     if let Some(tier) = self.tiers.get_mut(t_idx) {
-    //         return tier.deref_mut().get_mut(i_idx);
-    //     }
+                        prev_popped = Some(popped);
+                    }
+                }
 
-    //     None
-    // }
+                // potentially contract
 
-    // pub(crate) fn add_tier_and_insert(&mut self, data: T) {
-    //     let mut tier = Tier::new(self.tier_size);
-    //     tier.push_back(data)
-    //         .expect("new tier did not accept elements");
+                return Some(removed);
+            }
+        }
 
-    //     self.tiers.push(tier);
-    // }
-
-    // pub fn push(&mut self, data: T) -> TieredVecIndex {
-    //     if let Some(tier) = self.tiers.last_mut() {
-    //         match tier.push_back(data) {
-    //             Ok(idx) => {
-    //                 return (self.tiers.len() * self.tier_size) + idx;
-    //             }
-
-    //             Err(TierError::TierInsertionError(data)) => {
-    //                 self.add_tier_and_insert(data);
-    //             }
-
-    //             _ => todo!(),
-    //         }
-    //     } else {
-    //         self.add_tier_and_insert(data);
-    //     }
-
-    //     self.tiers.len() * self.tier_size
-    // }
+        return None;
+    }
 }

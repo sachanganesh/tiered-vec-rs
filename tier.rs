@@ -1,15 +1,15 @@
 use crossbeam_utils::CachePadded;
 use std::{
-    fmt::{Debug, Pointer, Write},
+    fmt::{Debug, Write},
     mem::MaybeUninit,
     ops::{Deref, DerefMut},
 };
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Clone, Debug, Error)]
 pub(crate) enum TierError<T>
 where
-    T: Debug + Send + Sync,
+    T: Clone + Debug + Send + Sync,
 {
     #[error("tier is full and cannot be inserted into")]
     TierFullInsertionError(T),
@@ -112,6 +112,10 @@ where
         self.len() == self.capacity()
     }
 
+    pub const fn max_rank(&self) -> usize {
+        self.len()
+    }
+
     #[inline]
     fn head_forward(&mut self) {
         self.head = self.head.wrapping_add(1);
@@ -143,7 +147,7 @@ where
     }
 
     #[inline]
-    const fn masked_rank(&self, rank: usize) -> usize {
+    pub(crate) const fn masked_rank(&self, rank: usize) -> usize {
         self.mask(self.head.wrapping_add(rank))
     }
 
@@ -166,16 +170,6 @@ where
 
     #[inline]
     pub(crate) const fn is_valid_masked_index(&self, masked_idx: usize) -> bool {
-        // passed idx should be already masked
-        // let masked_head = self.masked_head();
-        // let masked_tail = self.masked_tail();
-
-        // if masked_head < masked_tail {
-        //     masked_tail == 0 || (masked_idx >= masked_head && masked_idx < masked_tail)
-        // } else {
-        //     masked_idx < masked_tail || masked_idx >= masked_head
-        // }
-
         !self.masked_index_is_unused(masked_idx)
     }
 
@@ -245,12 +239,6 @@ where
         if !self.is_full() {
             let idx = self.masked_tail();
             self.tail_forward();
-
-            // if self.has_previously_been_written_to(idx) {
-            //     unsafe {
-            //         self.arr[idx].assume_init_drop();
-            //     }
-            // }
 
             self.set(idx, elem);
             Ok(idx)
