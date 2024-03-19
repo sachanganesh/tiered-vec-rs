@@ -93,6 +93,10 @@ where
         self.tiers = new_tiers;
     }
 
+    fn compress(&mut self) {
+        todo!()
+    }
+
     fn insert(&mut self, rank: usize, elem: T) {
         if self.is_full() {
             self.expand();

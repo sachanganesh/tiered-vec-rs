@@ -2,7 +2,7 @@ use crossbeam_utils::CachePadded;
 use std::{
     fmt::{Debug, Write},
     mem::MaybeUninit,
-    ops::{Deref, DerefMut},
+    ops::{Deref, DerefMut, Range},
 };
 use thiserror::Error;
 
@@ -181,7 +181,7 @@ where
         self.contains_masked_rank(self.masked_rank(rank))
     }
 
-    pub fn get(&self, idx: usize) -> Option<&T> {
+    fn get(&self, idx: usize) -> Option<&T> {
         let masked_idx = self.mask(idx);
         if !self.is_valid_masked_index(masked_idx) {
             return None;
@@ -191,7 +191,7 @@ where
         Some(unsafe { elem.assume_init_ref() })
     }
 
-    pub fn get_mut(&mut self, idx: usize) -> Option<&mut T> {
+    fn get_mut(&mut self, idx: usize) -> Option<&mut T> {
         let masked_idx = self.mask(idx);
         if !self.is_valid_masked_index(masked_idx) {
             return None;
@@ -207,6 +207,14 @@ where
 
     pub fn get_mut_by_rank(&mut self, rank: usize) -> Option<&mut T> {
         self.get_mut(self.head.wrapping_add(rank))
+    }
+
+    pub fn get_range_by_rank(&self, range: Range<usize>) -> Option<Vec<&T>> {
+        todo!()
+    }
+
+    pub fn get_mut_range_by_rank(&self, range: Range<usize>) -> Option<Vec<&mut T>> {
+        todo!()
     }
 
     fn set(&mut self, masked_idx: usize, elem: T) -> &mut T {
