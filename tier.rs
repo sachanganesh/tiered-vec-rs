@@ -113,7 +113,7 @@ where
     }
 
     pub const fn max_rank(&self) -> usize {
-        self.len()
+        self.len() - 1
     }
 
     #[inline]

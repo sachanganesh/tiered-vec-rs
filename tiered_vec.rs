@@ -79,6 +79,8 @@ where
                     .tiers
                     .get_mut(j)
                     .expect("tier does not exist at old index");
+
+                // todo: can be optimized if T is Copy
                 while let Ok(elem) = old_tier.pop_front() {
                     new_tier
                         .push_back(elem)
@@ -93,11 +95,52 @@ where
         self.tiers = new_tiers;
     }
 
-    fn compress(&mut self) {
-        todo!()
+    fn contract(&mut self) {
+        let new_tier_size = self.tier_size / 2;
+        let mut new_tiers = Vec::with_capacity(new_tier_size);
+
+        for i in 0..self.tier_size {
+            let old_tier = self
+                .tiers
+                .get_mut(i)
+                .expect("tier does not exist at old index");
+
+            let mut new_tier_half = Tier::new(new_tier_size);
+            let mut new_tier_rest = Tier::new(new_tier_size);
+
+            let mut j = 0;
+            while j < new_tier_size && j < old_tier.len() {
+                // todo: can be optimized if T is Copy
+                if let Ok(elem) = old_tier.pop_front() {
+                    new_tier_half
+                        .push_back(elem)
+                        .expect("new tier does not have enough space");
+                }
+
+                j += 1;
+            }
+
+            j = 0;
+            while j < new_tier_size && j < old_tier.len() {
+                // todo: can be optimized if T is Copy
+                if let Ok(elem) = old_tier.pop_front() {
+                    new_tier_rest
+                        .push_back(elem)
+                        .expect("new tier does not have enough space");
+                }
+
+                j += 1;
+            }
+
+            new_tiers.push(new_tier_half);
+            new_tiers.push(new_tier_rest);
+        }
+
+        self.tier_size = new_tier_size;
+        self.tiers = new_tiers;
     }
 
-    fn insert(&mut self, rank: usize, elem: T) {
+    pub fn insert(&mut self, rank: usize, elem: T) {
         if self.is_full() {
             self.expand();
         }
@@ -129,7 +172,7 @@ where
             .expect("could not insert into tier at rank");
     }
 
-    fn remove(&mut self, rank: usize) -> Option<T> {
+    pub fn remove(&mut self, rank: usize) -> Option<T> {
         let tier_idx = self.tier_index(rank);
         let last_tier_idx = self.tier_index(self.len());
         let mut prev_popped = None;
