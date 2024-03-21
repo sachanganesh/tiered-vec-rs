@@ -1,4 +1,3 @@
-use crossbeam_utils::CachePadded;
 use std::{
     fmt::{Debug, Write},
     mem::MaybeUninit,
@@ -31,7 +30,7 @@ where
 
 #[repr(transparent)]
 pub struct Tier<T> {
-    inner: CachePadded<RawTier<T>>,
+    inner: RawTier<T>,
 }
 
 impl<T> Tier<T>
@@ -40,7 +39,7 @@ where
 {
     pub fn new(initial_capacity: usize) -> Self {
         Self {
-            inner: CachePadded::new(RawTier::new(initial_capacity)),
+            inner: RawTier::new(initial_capacity),
         }
     }
 }
@@ -49,25 +48,24 @@ impl<T> Deref for Tier<T> {
     type Target = RawTier<T>;
 
     fn deref(&self) -> &Self::Target {
-        self.inner.deref()
+        &self.inner
     }
 }
 
 impl<T> DerefMut for Tier<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.inner.deref_mut()
+        &mut self.inner
     }
 }
 
 impl<T: Clone + Debug + Send + Sync + 'static> Debug for Tier<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        self.inner.deref().fmt(f)
+        self.inner.fmt(f)
     }
 }
 
-// #[repr(align(64))]
 pub struct RawTier<T> {
-    pub(crate) arr: Box<[MaybeUninit<T>]>,
+    pub(crate) buffer: Box<[MaybeUninit<T>]>,
     pub(crate) head: usize,
     pub(crate) tail: usize,
 }
@@ -85,7 +83,7 @@ where
         }
 
         Self {
-            arr: vec.into_boxed_slice(),
+            buffer: vec.into_boxed_slice(),
             head: 0,
             tail: 0,
         }
@@ -93,11 +91,11 @@ where
 
     #[inline]
     const fn mask(&self, val: usize) -> usize {
-        val & (self.arr.len() - 1)
+        val & (self.buffer.len() - 1)
     }
 
     pub const fn capacity(&self) -> usize {
-        self.arr.len()
+        self.buffer.len()
     }
 
     pub const fn len(&self) -> usize {
@@ -187,7 +185,7 @@ where
             return None;
         }
 
-        let elem = &self.arr[masked_idx];
+        let elem = &self.buffer[masked_idx];
         Some(unsafe { elem.assume_init_ref() })
     }
 
@@ -197,7 +195,7 @@ where
             return None;
         }
 
-        let elem = &mut self.arr[masked_idx];
+        let elem = &mut self.buffer[masked_idx];
         Some(unsafe { elem.assume_init_mut() })
     }
 
@@ -218,16 +216,16 @@ where
     }
 
     fn set(&mut self, masked_idx: usize, elem: T) -> &mut T {
-        self.arr[masked_idx].write(elem)
+        self.buffer[masked_idx].write(elem)
     }
 
     fn take(&mut self, masked_idx: usize) -> T {
-        let slot = &mut self.arr[masked_idx];
+        let slot = &mut self.buffer[masked_idx];
         unsafe { std::mem::replace(slot, MaybeUninit::uninit()).assume_init() }
     }
 
     fn replace(&mut self, masked_idx: usize, elem: T) -> T {
-        let slot = &mut self.arr[masked_idx];
+        let slot = &mut self.buffer[masked_idx];
         unsafe { std::mem::replace(slot, MaybeUninit::new(elem)).assume_init() }
     }
 
@@ -326,15 +324,16 @@ where
         let masked_tail = self.masked_tail();
         let masked_rank = self.masked_rank(rank);
 
+        // todo: investigate case in which tier is empty but rank > 0 needs to be inserted
         if !self.contains_masked_rank(masked_rank) {
             // if no element at rank, insert
-            return if masked_head == masked_rank {
+            if masked_head == masked_rank {
                 self.push_front(elem)
             } else if masked_tail == masked_rank {
                 self.push_back(elem)
             } else {
                 Err(TierError::TierDisconnectedEntryInsertionError(rank, elem))
-            };
+            }
         } else {
             // conversion should not fail given normalized values
             // unless tier size is so large that it overflows isize
@@ -399,14 +398,14 @@ impl<T: Clone + Debug + Send + Sync + 'static> Debug for RawTier<T> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         formatter.write_char('[')?;
 
-        for i in 0..self.arr.len() {
+        for i in 0..self.buffer.len() {
             if self.masked_index_is_unused(i) {
                 formatter.write_str("_")?;
             } else {
                 formatter.write_str(format!("{:?}", *self.get(i).unwrap()).as_str())?;
             }
 
-            if i != self.arr.len() - 1 {
+            if i != self.buffer.len() - 1 {
                 formatter.write_str(", ")?;
             }
         }

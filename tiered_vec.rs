@@ -1,13 +1,11 @@
-use anyhow::Result;
 use std::fmt::Debug;
-use thiserror::Error;
 
-use super::tier::{Tier, TierError};
+use super::tier::Tier;
 
 pub type TieredVecIndex = usize;
 
 pub struct TieredVec<T> {
-    pub(crate) tier_size: usize,
+    pub(crate) tier_size: usize, // todo: tier_size is implied with number of tiers
     pub(crate) tiers: Vec<Tier<T>>,
 }
 
@@ -16,6 +14,8 @@ where
     T: Clone + Debug + Send + Sync + 'static,
 {
     pub(crate) fn new(initial_capacity: usize) -> Self {
+        assert!(initial_capacity.is_power_of_two());
+
         Self {
             tier_size: initial_capacity,
             tiers: Vec::with_capacity(initial_capacity),
