@@ -1,57 +1,9 @@
 use std::{fmt::Debug, mem::MaybeUninit};
 
-#[repr(align(64))]
-#[derive(Clone)]
-pub(crate) struct ImplicitTierOffset {
-    head: usize,
-    tail: usize,
-}
-
-impl ImplicitTierOffset {
-    #[inline]
-    pub const fn len(&self) -> usize {
-        self.tail.wrapping_sub(self.head)
-    }
-
-    #[inline]
-    pub const fn is_empty(&self) -> bool {
-        self.head == self.tail
-    }
-
-    #[inline]
-    pub const fn is_full(&self, capacity: usize) -> bool {
-        self.len() == capacity
-    }
-
-    #[inline]
-    fn head_forward(&mut self) {
-        self.head = self.head.wrapping_add(1).into();
-    }
-
-    #[inline]
-    fn head_backward(&mut self) {
-        self.head = self.head.wrapping_sub(1).into();
-    }
-
-    #[inline]
-    fn tail_forward(&mut self) {
-        self.tail = self.tail.wrapping_add(1).into();
-    }
-
-    #[inline]
-    fn tail_backward(&mut self) {
-        self.tail = self.tail.wrapping_sub(1).into();
-    }
-}
-
-impl Default for ImplicitTierOffset {
-    fn default() -> Self {
-        Self { head: 0, tail: 0 }
-    }
-}
+use super::tier_ring_offsets::ImplicitTierRingOffsets;
 
 pub struct ImplicitTieredVec<T> {
-    offsets: Box<[ImplicitTierOffset]>,
+    offsets: Box<[ImplicitTierRingOffsets]>,
     buffer: Box<[MaybeUninit<T>]>,
 }
 
@@ -60,7 +12,7 @@ where
     T: Clone + Debug + Send + Sync + 'static,
 {
     pub fn new(initial_capacity: usize) -> Self {
-        let offsets = vec![ImplicitTierOffset::default(); initial_capacity];
+        let offsets = vec![ImplicitTierRingOffsets::default(); initial_capacity];
 
         let mut buffer = Vec::with_capacity(initial_capacity);
         unsafe {
@@ -73,6 +25,7 @@ where
         }
     }
 
+    #[inline]
     pub const fn capacity(&self) -> usize {
         self.buffer.len()
     }
@@ -93,10 +46,12 @@ where
         return l;
     }
 
+    #[inline]
     pub const fn is_empty(&self) -> bool {
         self.offsets[0].is_empty()
     }
 
+    #[inline]
     pub const fn is_full(&self) -> bool {
         self.offsets[self.offsets.len()].is_full(self.offsets.len())
     }
@@ -104,6 +59,23 @@ where
     #[inline]
     const fn mask(&self, val: usize) -> usize {
         val & (self.capacity() - 1)
+    }
+
+    const fn tier_idx(&self, rank: usize) -> usize {
+        rank / self.capacity()
+    }
+
+    fn get_mut_tier(&mut self, rank: usize) -> &mut [MaybeUninit<T>] {
+        let tier_idx = self.tier_idx(rank);
+        let cap = self.capacity();
+
+        &mut self.buffer[tier_idx..tier_idx + cap]
+    }
+
+    fn get_mut_tier_offset(&mut self, rank: usize) -> &mut ImplicitTierRingOffsets {
+        self.offsets
+            .get_mut(self.tier_idx(rank))
+            .expect("tier offset does not exist at index")
     }
 
     pub fn get_by_rank(&self) -> Option<&T> {

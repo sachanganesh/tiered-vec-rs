@@ -1,4 +1,4 @@
-mod implicit_tiered_vec;
+mod implicit;
 pub(crate) mod tier;
 mod tiered_vec;
 
