@@ -6,10 +6,7 @@ use std::{
 use thiserror::Error;
 
 #[derive(Clone, Debug, Error)]
-pub(crate) enum TierError<T>
-where
-    T: Clone + Debug + Send + Sync,
-{
+pub(crate) enum TierError<T> {
     #[error("tier is full and cannot be inserted into")]
     TierFullInsertionError(T),
 
@@ -221,7 +218,7 @@ where
 
     fn take(&mut self, masked_idx: usize) -> T {
         let slot = &mut self.buffer[masked_idx];
-        unsafe { std::mem::replace(slot, MaybeUninit::uninit()).assume_init() }
+        unsafe { std::mem::replace(slot, MaybeUninit::zeroed()).assume_init() }
     }
 
     fn replace(&mut self, masked_idx: usize, elem: T) -> T {
@@ -305,9 +302,11 @@ where
 
         while i < masked_tail {
             if let Some(curr_elem) = cursor {
-                cursor = Some(self.replace(i, curr_elem));
+                let elem = self.replace(i, curr_elem);
+                cursor = Some(elem);
             } else {
-                cursor = Some(self.take(i));
+                let elem = self.take(i);
+                cursor = Some(elem);
             }
 
             i = self.mask(i.wrapping_add(1));
@@ -504,13 +503,103 @@ mod tests {
 
         // [_, 1, 2, 3]
         assert!(t.remove_at_rank(0).is_ok());
-        println!("{:?}", t);
         assert_eq!(t.masked_head(), 1);
         assert_eq!(t.masked_tail(), 0);
         assert!(t.get(0).is_none());
         assert_eq!(*t.get(1).unwrap(), 1);
         assert_eq!(*t.get(2).unwrap(), 2);
         assert_eq!(*t.get(3).unwrap(), 3);
+    }
+
+    #[test]
+    fn shift_to_head_basic() {
+        let mut t = Tier::new(4);
+
+        // [0, 1, 2, n]
+        assert!(t.push_back(0).is_ok());
+        assert!(t.push_back(1).is_ok());
+        assert!(t.push_back(2).is_ok());
+
+        // [1, 2, n, 0]
+        t.shift_to_head(2);
+        assert_eq!(*t.get(0).unwrap(), 1);
+        assert_eq!(*t.get(1).unwrap(), 2);
+        assert_ne!(*t.get(2).unwrap(), 2);
+        assert_eq!(*t.get(3).unwrap(), 0);
+    }
+
+    #[test]
+    fn shift_to_head_data_middle_1() {
+        let mut t = Tier::new(4);
+
+        // [n, 1, 2, n]
+        assert!(t.push_back(0).is_ok());
+        assert!(t.push_back(1).is_ok());
+        assert!(t.push_back(2).is_ok());
+        assert!(t.pop_front().is_ok());
+
+        // [1, n, 2, n]
+        t.shift_to_head(1);
+        assert_eq!(*t.get(0).unwrap(), 1);
+        assert_ne!(*t.get(1).unwrap(), 1);
+        assert_eq!(*t.get(2).unwrap(), 2);
+        assert!(t.get(3).is_none());
+    }
+
+    #[test]
+    fn shift_to_head_data_middle_2() {
+        let mut t = Tier::new(4);
+
+        // [n, 1, 2, n]
+        assert!(t.push_back(0).is_ok());
+        assert!(t.push_back(1).is_ok());
+        assert!(t.push_back(2).is_ok());
+        assert!(t.pop_front().is_ok());
+
+        // [1, 2, n, n]
+        t.shift_to_head(1);
+        assert_eq!(*t.get(0).unwrap(), 1);
+        assert_eq!(*t.get(2).unwrap(), 2);
+        assert_ne!(*t.get(1).unwrap(), 2);
+        assert!(t.get(3).is_none());
+    }
+
+    #[test]
+    fn shift_to_tail_nonwrapping() {
+        let mut t = Tier::new(4);
+
+        // [0, 1, 2, n]
+        assert!(t.push_back(0).is_ok());
+        assert!(t.push_back(1).is_ok());
+        assert!(t.push_back(2).is_ok());
+
+        // [0, n, 1, 2]
+        t.shift_to_tail(1);
+        assert_eq!(*t.get(0).unwrap(), 0);
+        assert_ne!(*t.get(1).unwrap(), 1);
+        assert_eq!(*t.get(2).unwrap(), 1);
+        assert_eq!(*t.get(3).unwrap(), 2);
+    }
+
+    #[test]
+    fn shift_to_tail_wrapping() {
+        let mut t = Tier::new(4);
+
+        // [3, n, 1, 2]
+        assert!(t.push_back(0).is_ok());
+        assert!(t.push_back(0).is_ok());
+        assert!(t.push_back(1).is_ok());
+        assert!(t.push_back(2).is_ok());
+        assert!(t.pop_front().is_ok());
+        assert!(t.pop_front().is_ok());
+        assert!(t.push_back(3).is_ok());
+
+        // [n, 3, 1, 2]
+        t.shift_to_tail(0);
+        assert_ne!(*t.get(0).unwrap(), 3);
+        assert_eq!(*t.get(1).unwrap(), 3);
+        assert_eq!(*t.get(2).unwrap(), 1);
+        assert_eq!(*t.get(3).unwrap(), 2);
     }
 
     #[test]
@@ -629,98 +718,5 @@ mod tests {
         assert!(!t.is_valid_masked_index(1));
         assert!(t.is_valid_masked_index(2));
         assert!(t.is_valid_masked_index(3));
-    }
-
-    #[test]
-    fn shift_to_head_basic() {
-        let mut t = Tier::new(4);
-
-        // [0, 1, 2, n]
-        assert!(t.push_back(0).is_ok());
-        assert!(t.push_back(1).is_ok());
-        assert!(t.push_back(2).is_ok());
-        println!("{:?}", t);
-
-        // [1, 2, n, 0]
-        t.shift_to_head(2);
-        println!("{:?}", t);
-        assert_eq!(*t.get(0).unwrap(), 1);
-        assert_eq!(*t.get(1).unwrap(), 2);
-        assert_ne!(*t.get(2).unwrap(), 2);
-        assert_eq!(*t.get(3).unwrap(), 0);
-    }
-
-    #[test]
-    fn shift_to_head_data_middle_1() {
-        let mut t = Tier::new(4);
-
-        // [n, 1, 2, n]
-        assert!(t.push_back(0).is_ok());
-        assert!(t.push_back(1).is_ok());
-        assert!(t.push_back(2).is_ok());
-        assert!(t.pop_front().is_ok());
-
-        // [1, n, 2, n]
-        t.shift_to_head(1);
-        assert_eq!(*t.get(0).unwrap(), 1);
-        assert_ne!(*t.get(1).unwrap(), 1);
-        assert_eq!(*t.get(2).unwrap(), 2);
-        assert!(t.get(3).is_none());
-    }
-
-    #[test]
-    fn shift_to_head_data_middle_2() {
-        let mut t = Tier::new(4);
-
-        // [n, 1, 2, n]
-        assert!(t.push_back(0).is_ok());
-        assert!(t.push_back(1).is_ok());
-        assert!(t.push_back(2).is_ok());
-        assert!(t.pop_front().is_ok());
-
-        // [1, 2, n, n]
-        t.shift_to_head(1);
-        assert_eq!(*t.get(0).unwrap(), 1);
-        assert_eq!(*t.get(2).unwrap(), 2);
-        assert_ne!(*t.get(1).unwrap(), 2);
-        assert!(t.get(3).is_none());
-    }
-
-    #[test]
-    fn shift_to_tail_nonwrapping() {
-        let mut t = Tier::new(4);
-
-        // [0, 1, 2, n]
-        assert!(t.push_back(0).is_ok());
-        assert!(t.push_back(1).is_ok());
-        assert!(t.push_back(2).is_ok());
-
-        // [0, n, 1, 2]
-        t.shift_to_tail(1);
-        assert_eq!(*t.get(0).unwrap(), 0);
-        assert_ne!(*t.get(1).unwrap(), 1);
-        assert_eq!(*t.get(2).unwrap(), 1);
-        assert_eq!(*t.get(3).unwrap(), 2);
-    }
-
-    #[test]
-    fn shift_to_tail_wrapping() {
-        let mut t = Tier::new(4);
-
-        // [0, n, 1, 2]
-        assert!(t.push_back(0).is_ok());
-        assert!(t.push_back(0).is_ok());
-        assert!(t.push_back(1).is_ok());
-        assert!(t.push_back(2).is_ok());
-        assert!(t.pop_front().is_ok());
-        assert!(t.pop_front().is_ok());
-        assert!(t.push_back(0).is_ok());
-
-        // [n, 0, 1, 2]
-        t.shift_to_tail(0);
-        assert_ne!(*t.get(0).unwrap(), 0);
-        assert_eq!(*t.get(1).unwrap(), 0);
-        assert_eq!(*t.get(2).unwrap(), 1);
-        assert_eq!(*t.get(3).unwrap(), 2);
     }
 }
