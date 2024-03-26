@@ -1,6 +1,6 @@
 use std::{fmt::Debug, mem::MaybeUninit};
 
-use super::tier_ring_offsets::ImplicitTierRingOffsets;
+use super::{tier::ImplicitTier, tier_ring_offsets::ImplicitTierRingOffsets};
 
 pub struct ImplicitTieredVec<T> {
     offsets: Box<[ImplicitTierRingOffsets]>,
@@ -9,7 +9,7 @@ pub struct ImplicitTieredVec<T> {
 
 impl<T> ImplicitTieredVec<T>
 where
-    T: Clone + Debug + Send + Sync + 'static,
+    T: Copy + Debug + Send + Sync + 'static,
 {
     pub fn new(initial_capacity: usize) -> Self {
         let offsets = vec![ImplicitTierRingOffsets::default(); initial_capacity];
@@ -61,8 +61,23 @@ where
         val & (self.capacity() - 1)
     }
 
+    #[inline]
+    const fn num_tiers(&self) -> usize {
+        self.offsets.len()
+    }
+
+    #[inline]
     const fn tier_idx(&self, rank: usize) -> usize {
         rank / self.capacity()
+    }
+
+    fn get_tier_buffer(&self, idx: usize) -> &[MaybeUninit<T>] {
+        &self.buffer[idx..idx + self.num_tiers()]
+    }
+
+    fn get_mut_tier_buffer(&mut self, idx: usize) -> &mut [MaybeUninit<T>] {
+        let num_tiers = self.num_tiers();
+        &mut self.buffer[idx..idx + num_tiers]
     }
 
     fn get_mut_tier(&mut self, rank: usize) -> &mut [MaybeUninit<T>] {
@@ -78,8 +93,11 @@ where
             .expect("tier offset does not exist at index")
     }
 
-    pub fn get_by_rank(&self) -> Option<&T> {
-        todo!()
+    pub fn get_by_rank(&self, rank: usize) -> Option<&T> {
+        let tier_idx = self.tier_idx(rank);
+        let tier = self.get_tier_buffer(tier_idx);
+        let ring_offsets = &self.offsets[tier_idx];
+        ImplicitTier::get_by_rank(tier, ring_offsets, rank)
     }
 
     pub fn get_mut_by_rank(&mut self) -> Option<&mut T> {
