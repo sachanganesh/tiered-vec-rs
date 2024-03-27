@@ -12,7 +12,10 @@ where
     T: Copy + Debug + Send + Sync + 'static,
 {
     pub fn new(initial_capacity: usize) -> Self {
-        let offsets = vec![ImplicitTierRingOffsets::default(); initial_capacity];
+        assert!(initial_capacity.is_power_of_two());
+        assert!(initial_capacity.ge(&4));
+
+        let offsets = vec![ImplicitTierRingOffsets::default(); initial_capacity >> 1];
 
         let mut buffer = Vec::with_capacity(initial_capacity);
         unsafe {
@@ -67,6 +70,11 @@ where
     }
 
     #[inline]
+    const fn tier_size(&self) -> usize {
+        self.num_tiers()
+    }
+
+    #[inline]
     const fn tier_idx(&self, rank: usize) -> usize {
         rank / self.capacity()
     }
@@ -80,11 +88,10 @@ where
         &mut self.buffer[idx..idx + num_tiers]
     }
 
-    fn get_mut_tier(&mut self, rank: usize) -> &mut [MaybeUninit<T>] {
-        let tier_idx = self.tier_idx(rank);
-        let cap = self.capacity();
-
-        &mut self.buffer[tier_idx..tier_idx + cap]
+    fn get_tier_offset(&self, rank: usize) -> &ImplicitTierRingOffsets {
+        self.offsets
+            .get(self.tier_idx(rank))
+            .expect("tier offset does not exist at index")
     }
 
     fn get_mut_tier_offset(&mut self, rank: usize) -> &mut ImplicitTierRingOffsets {
@@ -100,12 +107,41 @@ where
         ImplicitTier::get_by_rank(tier, ring_offsets, rank)
     }
 
-    pub fn get_mut_by_rank(&mut self) -> Option<&mut T> {
-        todo!()
+    pub fn get_mut_by_rank(&mut self, rank: usize) -> Option<&mut T> {
+        let tier_size = self.tier_size();
+        let tier_idx = self.tier_idx(rank);
+
+        let ring_offsets = &self.offsets[tier_idx];
+        let tier = &mut self.buffer[tier_idx..tier_idx + tier_size];
+
+        ImplicitTier::get_mut_by_rank(tier, ring_offsets, rank)
     }
 
     fn expand(&mut self) {
-        todo!()
+        let old_tier_size = self.tier_size();
+        let new_tier_size = old_tier_size << 1;
+
+        let mut new_buffer = Vec::with_capacity(new_tier_size).into_boxed_slice();
+
+        for i in 0..new_tier_size {
+            let old_offset_idx = i * 2;
+
+            for j in old_offset_idx..old_offset_idx + 2 {
+                let old_offset = &self.offsets[j];
+
+                let start_idx = old_offset_idx * old_tier_size;
+                let end_idx = start_idx + old_tier_size;
+                let old_tier = &mut self.buffer[start_idx..end_idx];
+
+                let new_tier = &mut new_buffer[i..i + new_tier_size];
+
+                old_tier.rotate_left(old_offset.masked_head(old_tier_size));
+                new_tier.copy_from_slice(&old_tier);
+            }
+        }
+
+        self.offsets = vec![ImplicitTierRingOffsets::default(); new_tier_size].into_boxed_slice();
+        self.buffer = new_buffer;
     }
 
     fn contract(&mut self) {
@@ -113,7 +149,40 @@ where
     }
 
     fn insert(&mut self, rank: usize, elem: T) {
-        todo!()
+        if self.is_full() {
+            self.expand();
+        }
+
+        let offset_idx = self.tier_idx(rank);
+        let last_offset_idx = self.tier_idx(self.len());
+        let mut prev_popped = None;
+
+        // pop-push phase
+        for i in offset_idx..last_offset_idx + 1 {
+            let start_idx = i * self.tier_size();
+            let end_idx = start_idx + self.tier_size();
+
+            let offsets = &mut self.offsets[i];
+            let tier = &mut self.buffer[start_idx..end_idx];
+
+            if let Ok(popped) = ImplicitTier::pop_back(tier, offsets) {
+                if let Some(prev_elem) = prev_popped {
+                    ImplicitTier::push_front(tier, offsets, prev_elem)
+                        .expect("tier did not have space despite prior call to `pop_back`");
+                }
+
+                prev_popped = Some(popped);
+            }
+        }
+
+        // shift phase
+        let tier_idx = offset_idx * self.tier_size();
+        let tier_idx_end = tier_idx + self.tier_size();
+
+        let offset = &mut self.offsets[offset_idx];
+        let tier = &mut self.buffer[tier_idx..tier_idx_end];
+        ImplicitTier::insert_at_rank(tier, offset, rank, elem)
+            .expect("could not insert into tier at rank");
     }
 
     fn remove(&mut self, rank: usize, elem: T) {

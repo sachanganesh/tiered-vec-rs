@@ -15,6 +15,7 @@ where
 {
     pub(crate) fn new(initial_capacity: usize) -> Self {
         assert!(initial_capacity.is_power_of_two());
+        assert!(initial_capacity.ge(&4));
 
         Self {
             tier_size: initial_capacity,
@@ -22,7 +23,7 @@ where
         }
     }
 
-    pub(crate) const fn tier_index(&self, idx: TieredVecIndex) -> usize {
+    pub(crate) const fn tier_idx(&self, idx: TieredVecIndex) -> usize {
         idx / self.tier_size
     }
 
@@ -57,17 +58,17 @@ where
     }
 
     pub fn get_by_rank(&self, rank: usize) -> Option<&T> {
-        self.tiers.get(self.tier_index(rank))?.get_by_rank(rank)
+        self.tiers.get(self.tier_idx(rank))?.get_by_rank(rank)
     }
 
     pub fn get_mut_by_rank(&mut self, rank: usize) -> Option<&mut T> {
-        let tier_idx = self.tier_index(rank);
+        let tier_idx = self.tier_idx(rank);
 
         self.tiers.get_mut(tier_idx)?.get_mut_by_rank(rank)
     }
 
     fn expand(&mut self) {
-        let new_tier_size = self.tier_size * 2;
+        let new_tier_size = self.tier_size << 1;
         let mut new_tiers = Vec::with_capacity(new_tier_size);
 
         for i in 0..new_tier_size {
@@ -96,7 +97,7 @@ where
     }
 
     fn contract(&mut self) {
-        let new_tier_size = self.tier_size / 2;
+        let new_tier_size = self.tier_size >> 1;
         let mut new_tiers = Vec::with_capacity(new_tier_size);
 
         for i in 0..self.tier_size {
@@ -145,8 +146,8 @@ where
             self.expand();
         }
 
-        let tier_idx = self.tier_index(rank);
-        let last_tier_idx = self.tier_index(self.len());
+        let tier_idx = self.tier_idx(rank);
+        let last_tier_idx = self.tier_idx(self.len());
         let mut prev_popped = None;
 
         // pop-push phase
@@ -173,8 +174,8 @@ where
     }
 
     pub fn remove(&mut self, rank: usize) -> Option<T> {
-        let tier_idx = self.tier_index(rank);
-        let last_tier_idx = self.tier_index(self.len());
+        let tier_idx = self.tier_idx(rank);
+        let last_tier_idx = self.tier_idx(self.len());
         let mut prev_popped = None;
 
         // shift phase
