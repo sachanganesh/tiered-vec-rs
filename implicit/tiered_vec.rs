@@ -136,7 +136,7 @@ where
                 let new_tier = &mut new_buffer[i..i + new_tier_size];
 
                 old_tier.rotate_left(old_offset.masked_head(old_tier_size));
-                new_tier.copy_from_slice(&old_tier);
+                new_tier.clone_from_slice(&old_tier);
             }
         }
 
@@ -185,7 +185,42 @@ where
             .expect("could not insert into tier at rank");
     }
 
-    fn remove(&mut self, rank: usize, elem: T) {
-        todo!()
+    fn remove(&mut self, rank: usize) -> Option<T> {
+        let mut prev_popped = None;
+
+        // shift phase
+        let offset_idx = self.tier_idx(rank);
+        let last_offset_idx = self.tier_idx(self.len());
+        let tier_idx = offset_idx * self.tier_size();
+        let tier_idx_end = tier_idx + self.tier_size();
+
+        let offsets = &mut self.offsets[offset_idx];
+        let tier = &mut self.buffer[tier_idx..tier_idx_end];
+
+        if let Ok(removed) = ImplicitTier::remove_at_rank(tier, offsets, rank) {
+            // pop-push phase
+            for i in (tier_idx..last_offset_idx + 1).rev() {
+                let start_idx = i * self.tier_size();
+                let end_idx = start_idx + self.tier_size();
+
+                let offsets = &mut self.offsets[i];
+                let tier = &mut self.buffer[start_idx..end_idx];
+
+                if let Ok(popped) = ImplicitTier::pop_back(tier, offsets) {
+                    if let Some(prev_elem) = prev_popped {
+                        ImplicitTier::push_front(tier, offsets, prev_elem)
+                            .expect("tier did not have space despite prior call to `pop_back`");
+                    }
+
+                    prev_popped = Some(popped);
+                }
+            }
+
+            // potentially contract
+
+            return Some(removed);
+        }
+
+        return None;
     }
 }
