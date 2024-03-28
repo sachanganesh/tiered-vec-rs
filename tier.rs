@@ -6,7 +6,10 @@ use std::{
 use thiserror::Error;
 
 #[derive(Clone, Debug, Error)]
-pub(crate) enum TierError<T> {
+pub(crate) enum TierError<T>
+where
+    T: Clone + Debug,
+{
     #[error("tier is full and cannot be inserted into")]
     TierFullInsertionError(T),
 
@@ -18,8 +21,8 @@ pub(crate) enum TierError<T> {
     #[error("tier is empty and no element can be removed")]
     TierEmptyError,
 
-    #[error("the provided index is out of bounds")]
-    TierIndexOutOfBoundsError(usize),
+    #[error("the provided rank is out of bounds")]
+    TierRankOutOfBoundsError(usize),
     //
     // #[error("tier is full and at least some elements cannot be inserted")]
     // TierMultipleInsertionError(Vec<T>),
@@ -28,14 +31,14 @@ pub(crate) enum TierError<T> {
 #[repr(transparent)]
 pub struct Tier<T>
 where
-    T: Clone,
+    T: Clone + Debug,
 {
     inner: RawTier<T>,
 }
 
 impl<T> Tier<T>
 where
-    T: Clone + Debug + Send + Sync + 'static,
+    T: Clone + Debug,
 {
     pub fn new(capacity: usize) -> Self {
         Self {
@@ -44,7 +47,7 @@ where
     }
 }
 
-impl<T: Clone> Deref for Tier<T> {
+impl<T: Clone + Debug> Deref for Tier<T> {
     type Target = RawTier<T>;
 
     fn deref(&self) -> &Self::Target {
@@ -52,64 +55,72 @@ impl<T: Clone> Deref for Tier<T> {
     }
 }
 
-impl<T: Clone> DerefMut for Tier<T> {
+impl<T: Clone + Debug> DerefMut for Tier<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl<T: Clone + Debug + Send + Sync + 'static> Debug for Tier<T> {
+impl<T: Clone + Debug> Debug for Tier<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         self.inner.fmt(f)
     }
 }
 
-pub struct RawTier<T> {
-    pub(crate) buffer: Box<[MaybeUninit<T>]>,
+pub struct RawTier<T>
+where
+    T: Clone + Debug,
+{
+    pub(crate) buffer: Vec<MaybeUninit<T>>,
     pub(crate) head: usize,
     pub(crate) tail: usize,
 }
 
 impl<T> RawTier<T>
 where
-    T: Clone + Debug + Send + Sync + 'static,
+    T: Clone + Debug,
 {
     pub(crate) fn new(capacity: usize) -> Self {
         assert!(capacity.is_power_of_two());
 
         let mut vec = Vec::with_capacity(capacity);
         unsafe {
-            vec.set_len(capacity);
+            vec.set_len(vec.capacity());
         }
 
         Self {
-            buffer: vec.into_boxed_slice(),
+            buffer: vec,
             head: 0,
             tail: 0,
         }
     }
 
     #[inline]
-    const fn mask(&self, val: usize) -> usize {
+    fn mask(&self, val: usize) -> usize {
         val & (self.buffer.len() - 1)
     }
 
-    pub const fn capacity(&self) -> usize {
+    #[inline]
+    pub fn capacity(&self) -> usize {
         self.buffer.len()
     }
 
+    #[inline]
     pub const fn len(&self) -> usize {
         self.tail.wrapping_sub(self.head)
     }
 
+    #[inline]
     pub const fn is_empty(&self) -> bool {
         self.head == self.tail
     }
 
-    pub const fn is_full(&self) -> bool {
+    #[inline]
+    pub fn is_full(&self) -> bool {
         self.len() == self.capacity()
     }
 
+    #[inline]
     pub const fn max_rank(&self) -> usize {
         self.len() - 1
     }
@@ -135,21 +146,21 @@ where
     }
 
     #[inline]
-    pub(crate) const fn masked_head(&self) -> usize {
+    pub(crate) fn masked_head(&self) -> usize {
         self.mask(self.head)
     }
 
     #[inline]
-    pub(crate) const fn masked_tail(&self) -> usize {
+    pub(crate) fn masked_tail(&self) -> usize {
         self.mask(self.tail)
     }
 
     #[inline]
-    pub(crate) const fn masked_rank(&self, rank: usize) -> usize {
+    pub(crate) fn masked_rank(&self, rank: usize) -> usize {
         self.mask(self.head.wrapping_add(rank))
     }
 
-    const fn contains_masked_rank(&self, masked_rank: usize) -> bool {
+    fn contains_masked_rank(&self, masked_rank: usize) -> bool {
         let masked_head = self.masked_head();
         let masked_tail = self.masked_tail();
         if self.is_empty() {
@@ -165,7 +176,7 @@ where
         }
     }
 
-    pub const fn contains_rank(&self, rank: usize) -> bool {
+    pub fn contains_rank(&self, rank: usize) -> bool {
         self.contains_masked_rank(self.masked_rank(rank))
     }
 
@@ -201,6 +212,15 @@ where
 
     pub fn get_mut_range_by_rank(&self, range: Range<usize>) -> Option<Vec<&mut T>> {
         todo!()
+    }
+
+    pub fn rotate_reset(&mut self) {
+        self.tail = self.len();
+
+        let masked_head = self.masked_head();
+        self.buffer.rotate_left(masked_head);
+
+        self.head = 0;
     }
 
     fn set(&mut self, masked_idx: usize, elem: T) -> &mut T {
@@ -309,7 +329,7 @@ where
         }
     }
 
-    pub fn insert_at_rank(&mut self, rank: usize, elem: T) -> Result<usize, TierError<T>> {
+    pub fn insert(&mut self, rank: usize, elem: T) -> Result<usize, TierError<T>> {
         if self.is_full() {
             return Err(TierError::TierFullInsertionError(elem));
         }
@@ -363,7 +383,7 @@ where
         }
     }
 
-    pub fn remove_at_rank(&mut self, rank: usize) -> Result<T, TierError<T>> {
+    pub fn remove(&mut self, rank: usize) -> Result<T, TierError<T>> {
         let masked_rank = self.masked_rank(rank);
 
         if self.contains_masked_rank(masked_rank) {
@@ -379,12 +399,66 @@ where
 
             Ok(elem)
         } else {
-            Err(TierError::TierIndexOutOfBoundsError(rank))
+            Err(TierError::TierRankOutOfBoundsError(rank))
+        }
+    }
+
+    pub fn merge(&mut self, mut other: Tier<T>) {
+        self.rotate_reset();
+        self.buffer.reserve_exact(other.capacity());
+        unsafe {
+            self.buffer.set_len(self.buffer.capacity());
+        }
+
+        while let Ok(elem) = other.pop_front() {
+            self.push_back(elem)
+                .expect("resized tier could not merge element due to size");
+        }
+    }
+
+    pub fn merge_copy(&mut self, mut other: Tier<T>)
+    where
+        T: Copy,
+    {
+        self.rotate_reset();
+        other.rotate_reset();
+
+        self.buffer.reserve_exact(other.capacity());
+
+        todo!()
+    }
+
+    pub fn split_half(&mut self) -> Tier<T> {
+        self.rotate_reset();
+        let half_buffer = self.buffer.split_off(self.capacity() / 2);
+
+        Tier {
+            inner: RawTier {
+                buffer: half_buffer,
+                head: 0,
+                tail: 0,
+            },
         }
     }
 }
 
-impl<T: Clone + Debug + Send + Sync + 'static> Debug for RawTier<T> {
+impl<T: Clone + Debug> Drop for RawTier<T> {
+    fn drop(&mut self) {
+        if !self.is_empty() {
+            let mut i = self.masked_head();
+            let masked_tail = self.masked_tail();
+            while i != masked_tail {
+                unsafe {
+                    self.buffer[i].assume_init_drop();
+                }
+
+                i = self.mask(i.wrapping_add(1));
+            }
+        }
+    }
+}
+
+impl<T: Clone + Debug> Debug for RawTier<T> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         formatter.write_char('[')?;
 
@@ -452,7 +526,7 @@ mod tests {
         assert!(t.push_back(2).is_ok());
 
         // [1, 3, 2, 0]
-        assert!(t.insert_at_rank(1, 3).is_ok());
+        assert!(t.insert(1, 3).is_ok());
         assert_eq!(*t.get(0).unwrap(), 1);
         assert_eq!(*t.get(1).unwrap(), 3);
         assert_eq!(*t.get(2).unwrap(), 2);
@@ -470,7 +544,7 @@ mod tests {
         assert!(t.push_back(2).is_ok());
 
         // [0, 1, 3, 2]
-        assert!(t.insert_at_rank(2, 3).is_ok());
+        assert!(t.insert(2, 3).is_ok());
         assert_eq!(*t.get(0).unwrap(), 0);
         assert_eq!(*t.get(1).unwrap(), 1);
         assert_eq!(*t.get(2).unwrap(), 3);
@@ -490,7 +564,7 @@ mod tests {
         assert_eq!(t.masked_tail(), 0);
 
         // [0, 2, 3, _]
-        assert!(t.remove_at_rank(1).is_ok());
+        assert!(t.remove(1).is_ok());
         assert_eq!(t.masked_head(), 0);
         assert_eq!(t.masked_tail(), 3);
         assert_eq!(*t.get(0).unwrap(), 0);
@@ -512,7 +586,7 @@ mod tests {
         assert_eq!(t.masked_tail(), 0);
 
         // [_, 1, 2, 3]
-        assert!(t.remove_at_rank(0).is_ok());
+        assert!(t.remove(0).is_ok());
         assert_eq!(t.masked_head(), 1);
         assert_eq!(t.masked_tail(), 0);
         assert!(t.get(0).is_none());

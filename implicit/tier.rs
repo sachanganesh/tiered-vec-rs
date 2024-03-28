@@ -330,7 +330,7 @@ where
 
             Ok(elem)
         } else {
-            Err(TierError::TierIndexOutOfBoundsError(rank))
+            Err(TierError::TierRankOutOfBoundsError(rank))
         }
     }
 }
