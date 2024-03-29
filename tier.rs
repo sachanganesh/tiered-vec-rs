@@ -13,9 +13,7 @@ where
     #[error("tier is full and cannot be inserted into")]
     TierFullInsertionError(T),
 
-    #[error(
-        "index not in valid index range and insertion would be disconnected from main entries"
-    )]
+    #[error("rank not in valid range and insertion would be disconnected from main entries")]
     TierDisconnectedEntryInsertionError(usize, T),
 
     #[error("tier is empty and no element can be removed")]
@@ -180,7 +178,7 @@ where
         self.contains_masked_rank(self.masked_rank(rank))
     }
 
-    fn get(&self, idx: usize) -> Option<&T> {
+    pub(crate) fn get(&self, idx: usize) -> Option<&T> {
         if !self.contains_masked_rank(idx) {
             return None;
         }
@@ -189,7 +187,7 @@ where
         Some(unsafe { elem.assume_init_ref() })
     }
 
-    fn get_mut(&mut self, idx: usize) -> Option<&mut T> {
+    pub(crate) fn get_mut(&mut self, idx: usize) -> Option<&mut T> {
         if !self.contains_masked_rank(idx) {
             return None;
         }
@@ -384,6 +382,10 @@ where
     }
 
     pub fn remove(&mut self, rank: usize) -> Result<T, TierError<T>> {
+        if self.is_empty() {
+            return Err(TierError::TierEmptyError);
+        }
+
         let masked_rank = self.masked_rank(rank);
 
         if self.contains_masked_rank(masked_rank) {
@@ -430,15 +432,22 @@ where
 
     pub fn split_half(&mut self) -> Tier<T> {
         self.rotate_reset();
-        let half_buffer = self.buffer.split_off(self.capacity() / 2);
+        let count = self.len();
+        let new_capacity = self.capacity() / 2;
 
-        Tier {
+        let new_buffer = self.buffer.split_off(new_capacity);
+        let remaining_tail = count.saturating_sub(new_capacity);
+        self.tail = count.saturating_sub(remaining_tail);
+
+        let new_t = Tier {
             inner: RawTier {
-                buffer: half_buffer,
+                buffer: new_buffer,
                 head: 0,
-                tail: 0,
+                tail: remaining_tail,
             },
-        }
+        };
+
+        return new_t;
     }
 }
 
