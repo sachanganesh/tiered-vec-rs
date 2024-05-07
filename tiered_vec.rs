@@ -1,7 +1,8 @@
 use std::fmt::{Debug, Write};
 use thiserror::Error;
 
-use super::tier::{Tier, TierError};
+use super::tier::Tier;
+use super::tier_error::TierError;
 
 #[derive(Clone, Debug, Error)]
 pub enum TieredVectorError<T>
