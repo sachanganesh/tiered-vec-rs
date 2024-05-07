@@ -471,7 +471,7 @@ impl<T: Clone + Debug> Debug for RawTier<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::cache_conscious::tiered_vec::tier::*;
+    use crate::tier::*;
 
     #[test]
     #[should_panic]

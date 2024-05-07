@@ -1,0 +1,22 @@
+[package]
+name = "tiered-vec"
+version = "0.0.1"
+edition = "2021"
+authors = ["Sachandhan Ganesh <sachan.ganesh@gmail.com>"]
+description = "TBA"
+license = "MIT"
+
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dev-dependencies]
+criterion = { version = "0.5.1", features = ["html_reports"] }
+rand = { version = "0.8.5", features = ["small_rng"] }
+
+[dependencies]
+anyhow = "1.0.57"
+thiserror = "1.0.31"
+
+[[bench]]
+name = "tiered_vec"
+harness = false

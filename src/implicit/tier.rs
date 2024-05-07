@@ -1,6 +1,6 @@
 use std::{marker::PhantomData, mem::MaybeUninit};
 
-use crate::cache_conscious::tiered_vec::tier::TierError;
+use crate::tier::TierError;
 
 use super::tier_ring_offsets::ImplicitTierRingOffsets;
 
@@ -337,7 +337,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::cache_conscious::tiered_vec::implicit::tier::*;
+    use crate::implicit::tier::*;
 
     fn prepare_slice(len: usize) -> Box<[MaybeUninit<usize>]> {
         let mut v = Vec::with_capacity(len);

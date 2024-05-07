@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub(crate) mod tier;
 pub mod tier_error;
 mod tiered_vec;

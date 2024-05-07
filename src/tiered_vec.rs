@@ -257,7 +257,7 @@ impl<T: Clone + Debug> Debug for TieredVec<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::cache_conscious::tiered_vec::*;
+    use crate::*;
 
     #[test]
     #[should_panic]
