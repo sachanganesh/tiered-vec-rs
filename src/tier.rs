@@ -7,6 +7,7 @@ use std::{
 use super::tier_error::TierError;
 
 #[repr(transparent)]
+#[derive(Clone)]
 pub struct Tier<T>
 where
     T: Clone + Debug,
@@ -428,6 +429,35 @@ where
         };
 
         return new_t;
+    }
+}
+
+impl<T: Clone + Debug> Clone for RawTier<T> {
+    fn clone(&self) -> Self {
+        let mut buffer: Vec<MaybeUninit<T>> = Vec::with_capacity(self.buffer.capacity());
+        unsafe {
+            buffer.set_len(buffer.capacity());
+        }
+
+        let mut i = self.head;
+
+        while i != self.tail {
+            let idx = self.mask(i);
+
+            buffer[idx] = MaybeUninit::new(
+                self.get(idx)
+                    .expect("tried to retrieve element from valid index")
+                    .clone(),
+            );
+
+            i += 1;
+        }
+
+        Self {
+            buffer,
+            head: self.head,
+            tail: self.tail,
+        }
     }
 }
 
