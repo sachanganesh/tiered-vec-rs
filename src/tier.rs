@@ -142,11 +142,10 @@ where
     fn contains_masked_rank(&self, masked_rank: usize) -> bool {
         let masked_head = self.masked_head();
         let masked_tail = self.masked_tail();
-        if self.is_empty() {
-            false
-        } else if self.is_full() {
+
+        if self.is_full() {
             true
-        } else if masked_head < masked_tail {
+        } else if masked_head <= masked_tail {
             // standard case
             masked_rank >= masked_head && masked_rank < masked_tail
         } else {
