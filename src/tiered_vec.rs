@@ -137,18 +137,21 @@ where
     }
 
     fn try_contract(&mut self) {
-        if self.len() <= self.capacity() / 8 {
+        // only contract well below capacity to cull repeated alloc/free of memory upon reinsertion/redeletion
+        if self.len() < self.capacity() / 8 {
             let new_tier_size = self.tier_size() >> 1;
-
             let _ = self.tiers.split_off(new_tier_size >> 1);
 
-            let end_idx = self.capacity();
+            let end_idx = new_tier_size;
             for i in (0..end_idx).step_by(2) {
                 let old_tier = self.tiers.get_mut(i).expect("tier at index does not exist");
                 let half_tier = old_tier.split_half();
 
+                assert_eq!(half_tier.capacity(), new_tier_size);
                 self.tiers.insert(i + 1, half_tier);
             }
+
+            assert_eq!(self.tiers.len(), new_tier_size);
         }
     }
 
@@ -164,7 +167,6 @@ where
         }
 
         let mut tier_idx = self.tier_idx(rank);
-        let end_tier_idx = self.tier_idx(self.len());
         let mut prev_popped = None;
 
         // pop-push phase
@@ -174,16 +176,24 @@ where
             .expect("tier at index does not exist")
             .is_full()
         {
-            for i in tier_idx..end_tier_idx + 1 {
+            for i in tier_idx..self.tiers.len() {
                 let tier = self.tiers.get_mut(i).expect("tier at index does not exist");
 
-                if let Ok(popped) = tier.pop_front() {
-                    if let Some(prev_elem) = prev_popped {
-                        tier.push_back(prev_elem)
-                            .expect("tier did not have space despite prior call to `pop_back`");
-                    }
+                if tier.is_full() {
+                    if let Ok(popped) = tier.pop_front() {
+                        if let Some(prev_elem) = prev_popped {
+                            tier.push_back(prev_elem).expect(
+                                "tier did not have space despite prior call to `pop_front`",
+                            );
+                        }
 
-                    prev_popped = Some(popped);
+                        prev_popped = Some(popped);
+                    }
+                } else {
+                    if let Some(prev_elem) = prev_popped.take() {
+                        tier.push_back(prev_elem)
+                            .expect("tier did not have space despite prior call to `pop_front`");
+                    }
                 }
             }
         }
@@ -208,7 +218,6 @@ where
         self.try_contract();
 
         let tier_idx = self.tier_idx(rank);
-        let end_tier_idx = self.tier_idx(self.len());
         let mut prev_popped = None;
 
         // shift phase
@@ -226,13 +235,14 @@ where
 
             Ok(removed) => {
                 // pop-push phase
-                for i in (tier_idx + 1..end_tier_idx).rev() {
+                for i in (tier_idx + 1..self.tiers.len()).rev() {
                     let tier = self.tiers.get_mut(i).expect("tier at index does not exist");
 
                     if let Ok(popped) = tier.pop_front() {
                         if let Some(prev_elem) = prev_popped {
-                            tier.push_back(prev_elem)
-                                .expect("tier did not have space despite prior call to `pop_back`");
+                            tier.push_back(prev_elem).expect(
+                                "tier did not have space despite prior call to `pop_front`",
+                            );
                         }
 
                         prev_popped = Some(popped);
@@ -371,19 +381,12 @@ mod tests {
 
     #[test]
     fn remove_and_contract() {
-        let size = 8;
+        let size = 16;
         let mut t: TieredVec<usize> = TieredVec::new(size);
+        assert_eq!(t.capacity(), size * size);
 
-        for i in 0..size * size {
-            assert!(t.insert(i, i * 2).is_ok());
-        }
-        assert_eq!(t.tier_size(), size);
-        assert_eq!(t.len(), size * size);
-        assert!(t.is_full());
-
-        for i in (size * size / 8..t.len()).rev() {
-            assert!(t.remove(i).is_ok());
-            assert_eq!(t.len(), i);
+        for i in 0..size * size / 8 {
+            assert!(t.insert(i, i).is_ok());
         }
         assert_eq!(t.tier_size(), size);
         assert_eq!(t.len(), size * size / 8);
@@ -391,9 +394,16 @@ mod tests {
 
         assert!(t.remove(0).is_ok());
 
-        assert_eq!(*t.get_by_rank(0).unwrap(), 2);
+        assert_eq!(*t.get_by_rank(0).unwrap(), 1);
         assert_eq!(t.len(), (size * size / 8) - 1);
-        assert_eq!(t.capacity(), size * size / 8 * 2);
+        assert_eq!(t.capacity(), size * size);
+
+        // contract
+        assert!(t.remove(0).is_ok());
+
+        assert_eq!(*t.get_by_rank(0).unwrap(), 2);
+        assert_eq!(t.len(), (size * size / 8) - 2);
+        assert_eq!(t.capacity(), size * size / 4);
     }
 
     #[test]
