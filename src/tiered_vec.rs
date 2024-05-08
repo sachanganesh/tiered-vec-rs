@@ -19,6 +19,7 @@ where
     TieredVectorRankOutOfBoundsError(usize),
 }
 
+#[derive(Clone)]
 pub struct TieredVec<T>
 where
     T: Clone + Debug,
@@ -37,6 +38,31 @@ where
         let mut tiers = Vec::with_capacity(initial_tier_size);
         for _ in 0..initial_tier_size {
             tiers.push(Tier::new(initial_tier_size));
+        }
+
+        Self { tiers }
+    }
+
+    pub fn with_minimum_capacity(min_capacity: usize) -> Self {
+        assert!(min_capacity.ge(&4));
+
+        let mut capacity = min_capacity;
+        if !capacity.is_power_of_two() {
+            capacity = capacity.next_power_of_two();
+        }
+
+        let trailing = capacity.trailing_zeros();
+        let shift_count = if trailing & 1 == 0 {
+            trailing / 2
+        } else {
+            capacity = capacity << 1;
+            (trailing + 1) / 2
+        };
+
+        let tier_size = capacity >> shift_count;
+        let mut tiers = Vec::with_capacity(tier_size);
+        for _ in 0..tier_size {
+            tiers.push(Tier::new(tier_size));
         }
 
         Self { tiers }
@@ -280,6 +306,21 @@ mod tests {
         assert_eq!(t.tier_size(), size);
         assert!(t.is_empty());
         assert!(!t.is_full());
+    }
+
+    #[test]
+    fn with_minimum_capacity() {
+        let mut t: TieredVec<usize> = TieredVec::with_minimum_capacity(4);
+        assert_eq!(4, t.capacity());
+        assert_eq!(2, t.tier_size());
+
+        t = TieredVec::with_minimum_capacity(8);
+        assert_eq!(16, t.capacity());
+        assert_eq!(4, t.tier_size());
+
+        t = TieredVec::with_minimum_capacity(128);
+        assert_eq!(256, t.capacity());
+        assert_eq!(16, t.tier_size());
     }
 
     #[test]
