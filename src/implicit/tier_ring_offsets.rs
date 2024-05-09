@@ -25,9 +25,17 @@ impl ImplicitTierRingOffsets {
         self.head
     }
 
+    pub fn set_head(&mut self, new_head: usize) {
+        self.head = new_head;
+    }
+
     #[inline(always)]
     pub const fn tail(&self) -> usize {
         self.tail
+    }
+
+    pub fn set_tail(&mut self, new_tail: usize) {
+        self.tail = new_tail;
     }
 
     #[inline(always)]
