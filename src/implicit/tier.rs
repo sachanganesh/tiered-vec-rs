@@ -1,19 +1,19 @@
-use std::{marker::PhantomData, mem::MaybeUninit};
+use std::{fmt::Debug, marker::PhantomData, mem::MaybeUninit};
 
-use crate::tier::TierError;
+use crate::tier_error::TierError;
 
 use super::tier_ring_offsets::ImplicitTierRingOffsets;
 
 pub struct ImplicitTier<T>
 where
-    T: Copy,
+    T: Clone + Debug,
 {
     marker: PhantomData<T>,
 }
 
 impl<T> ImplicitTier<T>
 where
-    T: Copy,
+    T: Clone + Debug,
 {
     #[inline(always)]
     pub const fn capacity(tier: &[MaybeUninit<T>]) -> usize {
@@ -51,16 +51,25 @@ where
         !Self::masked_index_is_unused(tier, ring_offsets, masked_idx)
     }
 
-    #[inline]
     const fn contains_masked_rank(
         tier: &[MaybeUninit<T>],
         ring_offsets: &ImplicitTierRingOffsets,
         masked_rank: usize,
     ) -> bool {
-        !Self::masked_index_is_unused(tier, ring_offsets, masked_rank)
+        let masked_head = ring_offsets.masked_head(Self::capacity(tier));
+        let masked_tail = ring_offsets.masked_tail(Self::capacity(tier));
+
+        if ring_offsets.is_full(Self::capacity(tier)) {
+            true
+        } else if masked_head <= masked_tail {
+            // standard case
+            masked_rank >= masked_head && masked_rank < masked_tail
+        } else {
+            // wrapping case
+            masked_rank >= masked_head || masked_rank < masked_tail
+        }
     }
 
-    #[inline]
     pub const fn contains_rank(
         tier: &[MaybeUninit<T>],
         ring_offsets: &ImplicitTierRingOffsets,
@@ -69,7 +78,7 @@ where
         Self::contains_masked_rank(
             tier,
             ring_offsets,
-            Self::mask(tier, ring_offsets.head().wrapping_add(rank)),
+            ring_offsets.masked_rank(rank, Self::capacity(tier)),
         )
     }
 

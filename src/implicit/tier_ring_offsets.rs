@@ -64,6 +64,11 @@ impl ImplicitTierRingOffsets {
     pub const fn masked_tail(&self, capacity: usize) -> usize {
         self.mask(self.tail, capacity)
     }
+
+    #[inline(always)]
+    pub const fn masked_rank(&self, rank: usize, capacity: usize) -> usize {
+        self.mask(self.head.wrapping_add(rank), capacity)
+    }
 }
 
 impl Default for ImplicitTierRingOffsets {
