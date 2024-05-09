@@ -25,32 +25,6 @@ where
         val & (Self::capacity(tier) - 1)
     }
 
-    #[inline]
-    const fn masked_index_is_unused(
-        tier: &[MaybeUninit<T>],
-        ring_offsets: &ImplicitTierRingOffsets,
-        masked_idx: usize,
-    ) -> bool {
-        let masked_head = Self::mask(tier, ring_offsets.head());
-        let masked_tail = Self::mask(tier, ring_offsets.tail());
-
-        if masked_head < masked_tail {
-            masked_idx < masked_head
-                || (masked_idx >= masked_tail && masked_idx < Self::capacity(tier))
-        } else {
-            masked_idx >= masked_tail && masked_idx < masked_head
-        }
-    }
-
-    #[inline]
-    pub(crate) const fn is_valid_masked_index(
-        tier: &[MaybeUninit<T>],
-        ring_offsets: &ImplicitTierRingOffsets,
-        masked_idx: usize,
-    ) -> bool {
-        !Self::masked_index_is_unused(tier, ring_offsets, masked_idx)
-    }
-
     const fn contains_masked_rank(
         tier: &[MaybeUninit<T>],
         ring_offsets: &ImplicitTierRingOffsets,
@@ -87,12 +61,11 @@ where
         ring_offsets: &ImplicitTierRingOffsets,
         idx: usize,
     ) -> Option<&'a T> {
-        let masked_idx = Self::mask(tier, idx);
-        if !Self::is_valid_masked_index(tier, ring_offsets, masked_idx) {
+        if !Self::contains_masked_rank(tier, ring_offsets, idx) {
             return None;
         }
 
-        let elem = &tier[masked_idx];
+        let elem = &tier[idx];
         Some(unsafe { elem.assume_init_ref() })
     }
 
@@ -101,12 +74,11 @@ where
         ring_offsets: &ImplicitTierRingOffsets,
         idx: usize,
     ) -> Option<&'a mut T> {
-        let masked_idx = Self::mask(tier, idx);
-        if !Self::is_valid_masked_index(tier, ring_offsets, masked_idx) {
+        if !Self::contains_masked_rank(tier, ring_offsets, idx) {
             return None;
         }
 
-        let elem = &mut tier[masked_idx];
+        let elem = &mut tier[idx];
         Some(unsafe { elem.assume_init_mut() })
     }
 
@@ -115,7 +87,11 @@ where
         ring_offsets: &ImplicitTierRingOffsets,
         rank: usize,
     ) -> Option<&'a T> {
-        Self::get(tier, ring_offsets, ring_offsets.head().wrapping_add(rank))
+        Self::get(
+            tier,
+            ring_offsets,
+            ring_offsets.masked_rank(rank, Self::capacity(tier)),
+        )
     }
 
     pub fn get_mut_by_rank<'a>(
@@ -123,7 +99,23 @@ where
         ring_offsets: &ImplicitTierRingOffsets,
         rank: usize,
     ) -> Option<&'a mut T> {
-        Self::get_mut(tier, ring_offsets, ring_offsets.head().wrapping_add(rank))
+        Self::get_mut(
+            tier,
+            ring_offsets,
+            ring_offsets.masked_rank(rank, Self::capacity(tier)),
+        )
+    }
+
+    pub fn rotate_reset<'a>(
+        tier: &'a mut [MaybeUninit<T>],
+        ring_offsets: &'a mut ImplicitTierRingOffsets,
+    ) {
+        ring_offsets.set_tail(ring_offsets.len());
+
+        let masked_head = ring_offsets.masked_head(Self::capacity(tier));
+        tier.rotate_left(masked_head);
+
+        ring_offsets.set_head(0);
     }
 
     fn set(tier: &mut [MaybeUninit<T>], masked_idx: usize, elem: T) -> &mut T {
@@ -146,6 +138,7 @@ where
         elem: T,
     ) -> Result<usize, TierError<T>> {
         let cap = Self::capacity(tier);
+
         if !ring_offsets.is_full(cap) {
             ring_offsets.head_backward();
             let idx = ring_offsets.masked_head(cap);
@@ -163,6 +156,7 @@ where
         elem: T,
     ) -> Result<usize, TierError<T>> {
         let cap = Self::capacity(tier);
+
         if !ring_offsets.is_full(cap) {
             let idx = ring_offsets.masked_tail(cap);
             ring_offsets.tail_forward();
@@ -255,41 +249,39 @@ where
         }
     }
 
-    pub fn insert_at_rank(
+    pub fn insert(
         tier: &mut [MaybeUninit<T>],
         ring_offsets: &mut ImplicitTierRingOffsets,
         rank: usize,
         elem: T,
     ) -> Result<usize, TierError<T>> {
-        let masked_head = Self::mask(tier, ring_offsets.head());
-        let masked_tail = Self::mask(tier, ring_offsets.tail());
-        let masked_rank = Self::mask(tier, ring_offsets.head().wrapping_add(rank));
+        let cap = Self::capacity(tier);
 
-        // todo: investigate case in which tier is empty but rank > 0 needs to be inserted
-        if !Self::contains_masked_rank(tier, ring_offsets, masked_rank) {
-            // if no element at rank, insert
+        let masked_head = ring_offsets.masked_head(cap);
+        let masked_tail = ring_offsets.masked_tail(cap);
+        let masked_rank = ring_offsets.masked_rank(rank, cap);
+
+        if masked_tail == masked_rank {
+            Self::push_back(tier, ring_offsets, elem)
+        } else if Self::contains_masked_rank(tier, &ring_offsets, masked_rank) {
             if masked_head == masked_rank {
                 Self::push_front(tier, ring_offsets, elem)
-            } else if masked_tail == masked_rank {
-                Self::push_back(tier, ring_offsets, elem)
             } else {
-                Err(TierError::TierDisconnectedEntryInsertionError(rank, elem))
+                let head_delta = masked_rank.abs_diff(masked_head);
+                let tail_delta = masked_rank.abs_diff(masked_tail);
+
+                if head_delta <= tail_delta {
+                    Self::shift_to_head(tier, ring_offsets, masked_rank);
+                } else {
+                    Self::shift_to_tail(tier, ring_offsets, masked_rank);
+                }
+
+                Self::set(tier, masked_rank, elem);
+
+                Ok(masked_rank)
             }
         } else {
-            // conversion should not fail given normalized values
-            // unless tier size is so large that it overflows isize
-
-            let head_delta = masked_rank.abs_diff(masked_head);
-            let tail_delta = masked_rank.abs_diff(masked_tail);
-
-            if head_delta <= tail_delta {
-                Self::shift_to_head(tier, ring_offsets, masked_rank);
-            } else {
-                Self::shift_to_tail(tier, ring_offsets, masked_rank);
-            }
-
-            Self::set(tier, masked_rank, elem);
-            Ok(masked_rank)
+            Err(TierError::TierDisconnectedEntryInsertionError(rank, elem))
         }
     }
 
@@ -301,7 +293,7 @@ where
         let mut cursor = None;
 
         ring_offsets.tail_backward();
-        let mut i: usize = ring_offsets.masked_tail(Self::capacity(tier));
+        let mut i = ring_offsets.masked_tail(Self::capacity(tier));
 
         while i > gap_masked_idx {
             if let Some(elem) = cursor {
@@ -318,16 +310,20 @@ where
         }
     }
 
-    pub fn remove_at_rank(
+    pub fn remove(
         tier: &mut [MaybeUninit<T>],
         ring_offsets: &mut ImplicitTierRingOffsets,
         rank: usize,
     ) -> Result<T, TierError<T>> {
-        let masked_rank = Self::mask(tier, ring_offsets.head().wrapping_add(rank));
+        if ring_offsets.is_empty() {
+            return Err(TierError::TierEmptyError);
+        }
+
+        let cap = Self::capacity(tier);
+        let masked_rank = ring_offsets.masked_rank(rank, cap);
 
         if Self::contains_masked_rank(tier, ring_offsets, masked_rank) {
             let elem = Self::take(tier, masked_rank);
-            let cap = Self::capacity(tier);
 
             if masked_rank == ring_offsets.masked_head(cap) {
                 ring_offsets.head_forward();
@@ -368,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_at_rank_shift_head() {
+    fn insert_shift_head() {
         let mut s = prepare_slice(4);
         let mut ring_offsets = prepare_ring_offsets();
 
@@ -378,7 +374,7 @@ mod tests {
         assert!(ImplicitTier::push_back(&mut s, &mut ring_offsets, 2).is_ok());
 
         // [1, 3, 2, 0]
-        assert!(ImplicitTier::insert_at_rank(&mut s, &mut ring_offsets, 1, 3).is_ok());
+        assert!(ImplicitTier::insert(&mut s, &mut ring_offsets, 1, 3).is_ok());
         assert_eq!(*ImplicitTier::get(&s, &ring_offsets, 0).unwrap(), 1);
         assert_eq!(*ImplicitTier::get(&s, &ring_offsets, 1).unwrap(), 3);
         assert_eq!(*ImplicitTier::get(&s, &ring_offsets, 2).unwrap(), 2);
@@ -387,7 +383,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_at_rank_shift_tail() {
+    fn insert_shift_tail() {
         let mut s = prepare_slice(4);
         let mut ring_offsets = prepare_ring_offsets();
 
@@ -397,7 +393,7 @@ mod tests {
         assert!(ImplicitTier::push_back(&mut s, &mut ring_offsets, 2).is_ok());
 
         // [0, 1, 3, 2]
-        assert!(ImplicitTier::insert_at_rank(&mut s, &mut ring_offsets, 2, 3).is_ok());
+        assert!(ImplicitTier::insert(&mut s, &mut ring_offsets, 2, 3).is_ok());
         assert_eq!(*ImplicitTier::get(&s, &ring_offsets, 0).unwrap(), 0);
         assert_eq!(*ImplicitTier::get(&s, &ring_offsets, 1).unwrap(), 1);
         assert_eq!(*ImplicitTier::get(&s, &ring_offsets, 2).unwrap(), 3);
@@ -405,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_at_rank_1() {
+    fn remove_1() {
         let mut s = prepare_slice(4);
         let mut ring_offsets = prepare_ring_offsets();
 
@@ -418,7 +414,7 @@ mod tests {
         assert_eq!(ring_offsets.masked_tail(ImplicitTier::capacity(&s,)), 0);
 
         // [0, 2, 3, _]
-        assert!(ImplicitTier::remove_at_rank(&mut s, &mut ring_offsets, 1).is_ok());
+        assert!(ImplicitTier::remove(&mut s, &mut ring_offsets, 1).is_ok());
         assert_eq!(ring_offsets.masked_head(ImplicitTier::capacity(&s)), 0);
         assert_eq!(ring_offsets.masked_tail(ImplicitTier::capacity(&s)), 3);
         assert_eq!(*ImplicitTier::get(&s, &ring_offsets, 0).unwrap(), 0);
@@ -428,7 +424,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_at_rank_2() {
+    fn remove_2() {
         let mut s = prepare_slice(4);
         let mut ring_offsets = prepare_ring_offsets();
 
@@ -441,7 +437,7 @@ mod tests {
         assert_eq!(ring_offsets.masked_tail(ImplicitTier::capacity(&s)), 0);
 
         // [_, 1, 2, 3]
-        assert!(ImplicitTier::remove_at_rank(&mut s, &mut ring_offsets, 0).is_ok());
+        assert!(ImplicitTier::remove(&mut s, &mut ring_offsets, 0).is_ok());
         assert_eq!(ring_offsets.masked_head(ImplicitTier::capacity(&s)), 1);
         assert_eq!(ring_offsets.masked_tail(ImplicitTier::capacity(&s)), 0);
         assert!(ImplicitTier::get(&s, &ring_offsets, 0).is_none());
@@ -564,10 +560,10 @@ mod tests {
         assert_eq!(*ImplicitTier::get(&s, &ring_offsets, 3).unwrap(), 0);
         assert_eq!(*ImplicitTier::get_by_rank(&s, &ring_offsets, 0).unwrap(), 0);
 
-        assert!(!ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 0));
-        assert!(!ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 1));
-        assert!(!ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 2));
-        assert!(ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 3));
+        assert!(!ImplicitTier::contains_masked_rank(&s, &ring_offsets, 0));
+        assert!(!ImplicitTier::contains_masked_rank(&s, &ring_offsets, 1));
+        assert!(!ImplicitTier::contains_masked_rank(&s, &ring_offsets, 2));
+        assert!(ImplicitTier::contains_masked_rank(&s, &ring_offsets, 3));
 
         // [1, n, n, 0]
         assert!(ImplicitTier::push_back(&mut s, &mut ring_offsets, 1).is_ok());
@@ -578,10 +574,10 @@ mod tests {
         assert_eq!(*ImplicitTier::get(&s, &ring_offsets, 0).unwrap(), 1);
         assert_eq!(*ImplicitTier::get_by_rank(&s, &ring_offsets, 1).unwrap(), 1);
 
-        assert!(ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 0));
-        assert!(!ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 1));
-        assert!(!ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 2));
-        assert!(ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 3));
+        assert!(ImplicitTier::contains_masked_rank(&s, &ring_offsets, 0));
+        assert!(!ImplicitTier::contains_masked_rank(&s, &ring_offsets, 1));
+        assert!(!ImplicitTier::contains_masked_rank(&s, &ring_offsets, 2));
+        assert!(ImplicitTier::contains_masked_rank(&s, &ring_offsets, 3));
 
         // [1, n, 2, 0]
         assert!(ImplicitTier::push_front(&mut s, &mut ring_offsets, 2).is_ok());
@@ -592,10 +588,10 @@ mod tests {
         assert_eq!(*ImplicitTier::get(&s, &ring_offsets, 2).unwrap(), 2);
         assert_eq!(*ImplicitTier::get_by_rank(&s, &ring_offsets, 0).unwrap(), 2);
 
-        assert!(ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 0));
-        assert!(!ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 1));
-        assert!(ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 2));
-        assert!(ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 3));
+        assert!(ImplicitTier::contains_masked_rank(&s, &ring_offsets, 0));
+        assert!(!ImplicitTier::contains_masked_rank(&s, &ring_offsets, 1));
+        assert!(ImplicitTier::contains_masked_rank(&s, &ring_offsets, 2));
+        assert!(ImplicitTier::contains_masked_rank(&s, &ring_offsets, 3));
 
         // [1, 3, 2, 0]
         assert!(ImplicitTier::push_back(&mut s, &mut ring_offsets, 3).is_ok());
@@ -609,10 +605,10 @@ mod tests {
         assert!(!ring_offsets.is_empty());
         assert!(ring_offsets.is_full(ImplicitTier::capacity(&s)));
 
-        assert!(ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 0));
-        assert!(ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 1));
-        assert!(ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 2));
-        assert!(ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 3));
+        assert!(ImplicitTier::contains_masked_rank(&s, &ring_offsets, 0));
+        assert!(ImplicitTier::contains_masked_rank(&s, &ring_offsets, 1));
+        assert!(ImplicitTier::contains_masked_rank(&s, &ring_offsets, 2));
+        assert!(ImplicitTier::contains_masked_rank(&s, &ring_offsets, 3));
 
         assert!(ImplicitTier::push_back(&mut s, &mut ring_offsets, 4).is_err());
         assert_eq!(ring_offsets.masked_head(ImplicitTier::capacity(&s)), 2);
@@ -629,10 +625,10 @@ mod tests {
         assert_eq!(ring_offsets.masked_tail(ImplicitTier::capacity(&s)), 2);
         assert!(ImplicitTier::get(&s, &ring_offsets, 2).is_none());
 
-        assert!(ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 0));
-        assert!(ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 1));
-        assert!(!ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 2));
-        assert!(ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 3));
+        assert!(ImplicitTier::contains_masked_rank(&s, &ring_offsets, 0));
+        assert!(ImplicitTier::contains_masked_rank(&s, &ring_offsets, 1));
+        assert!(!ImplicitTier::contains_masked_rank(&s, &ring_offsets, 2));
+        assert!(ImplicitTier::contains_masked_rank(&s, &ring_offsets, 3));
 
         // [1, n, n, 0]
         v = ImplicitTier::pop_back(&mut s, &mut ring_offsets);
@@ -645,10 +641,10 @@ mod tests {
         assert_eq!(ring_offsets.masked_tail(ImplicitTier::capacity(&s)), 1);
         assert!(ImplicitTier::get(&s, &ring_offsets, 1).is_none());
 
-        assert!(ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 0));
-        assert!(!ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 1));
-        assert!(!ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 2));
-        assert!(ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 3));
+        assert!(ImplicitTier::contains_masked_rank(&s, &ring_offsets, 0));
+        assert!(!ImplicitTier::contains_masked_rank(&s, &ring_offsets, 1));
+        assert!(!ImplicitTier::contains_masked_rank(&s, &ring_offsets, 2));
+        assert!(ImplicitTier::contains_masked_rank(&s, &ring_offsets, 3));
 
         // [1, n, 4, 0]
         assert!(ImplicitTier::push_front(&mut s, &mut ring_offsets, 4).is_ok());
@@ -659,9 +655,9 @@ mod tests {
         assert_eq!(*ImplicitTier::get(&s, &ring_offsets, 2).unwrap(), 4);
         assert_eq!(*ImplicitTier::get_by_rank(&s, &ring_offsets, 0).unwrap(), 4);
 
-        assert!(ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 0));
-        assert!(!ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 1));
-        assert!(ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 2));
-        assert!(ImplicitTier::is_valid_masked_index(&s, &ring_offsets, 3));
+        assert!(ImplicitTier::contains_masked_rank(&s, &ring_offsets, 0));
+        assert!(!ImplicitTier::contains_masked_rank(&s, &ring_offsets, 1));
+        assert!(ImplicitTier::contains_masked_rank(&s, &ring_offsets, 2));
+        assert!(ImplicitTier::contains_masked_rank(&s, &ring_offsets, 3));
     }
 }

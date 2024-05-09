@@ -181,7 +181,7 @@ where
 
         let offset = &mut self.offsets[offset_idx];
         let tier = &mut self.buffer[tier_idx..tier_idx_end];
-        ImplicitTier::insert_at_rank(tier, offset, rank, elem)
+        ImplicitTier::insert(tier, offset, rank, elem)
             .expect("could not insert into tier at rank");
     }
 
@@ -197,7 +197,7 @@ where
         let offsets = &mut self.offsets[offset_idx];
         let tier = &mut self.buffer[tier_idx..tier_idx_end];
 
-        if let Ok(removed) = ImplicitTier::remove_at_rank(tier, offsets, rank) {
+        if let Ok(removed) = ImplicitTier::remove(tier, offsets, rank) {
             // pop-push phase
             for i in (tier_idx..last_offset_idx + 1).rev() {
                 let start_idx = i * self.tier_size();
