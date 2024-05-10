@@ -4,7 +4,7 @@ use std::{
     ops::{Deref, DerefMut, Range},
 };
 
-use super::tier_error::TierError;
+use super::error::TierError;
 
 #[repr(transparent)]
 #[derive(Clone)]
@@ -184,11 +184,11 @@ where
         self.get_mut(self.masked_rank(rank))
     }
 
-    pub fn get_range_by_rank(&self, range: Range<usize>) -> Option<Vec<&T>> {
+    pub fn get_range_by_rank(&self, _range: Range<usize>) -> Option<Vec<&T>> {
         todo!()
     }
 
-    pub fn get_mut_range_by_rank(&self, range: Range<usize>) -> Option<Vec<&mut T>> {
+    pub fn get_mut_range_by_rank(&self, _range: Range<usize>) -> Option<Vec<&mut T>> {
         todo!()
     }
 
@@ -201,15 +201,18 @@ where
         self.head = 0;
     }
 
+    #[inline]
     fn set(&mut self, masked_idx: usize, elem: T) -> &mut T {
         self.buffer[masked_idx].write(elem)
     }
 
+    #[inline]
     fn take(&mut self, masked_idx: usize) -> T {
         let slot = &mut self.buffer[masked_idx];
         unsafe { std::mem::replace(slot, MaybeUninit::uninit()).assume_init() }
     }
 
+    #[inline]
     fn replace(&mut self, masked_idx: usize, elem: T) -> T {
         let slot = &mut self.buffer[masked_idx];
         unsafe { std::mem::replace(slot, MaybeUninit::new(elem)).assume_init() }
