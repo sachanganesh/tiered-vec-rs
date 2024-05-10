@@ -1,23 +1,7 @@
 use std::fmt::{Debug, Write};
-use thiserror::Error;
 
+use super::error::{TierError, TieredVectorError};
 use super::tier::Tier;
-use super::tier_error::TierError;
-
-#[derive(Clone, Debug, Error)]
-pub enum TieredVectorError<T>
-where
-    T: Clone + Debug,
-{
-    #[error("rank not in valid range and insertion would be disconnected from main entries")]
-    TieredVectorOutofBoundsInsertionError(usize, T),
-
-    #[error("tiered vector is empty and no element can be removed")]
-    TieredVectorEmptyError,
-
-    #[error("the provided rank is out of bounds")]
-    TieredVectorRankOutOfBoundsError(usize),
-}
 
 #[derive(Clone)]
 pub struct TieredVec<T>
@@ -156,6 +140,7 @@ where
     }
 
     pub fn insert(&mut self, rank: usize, elem: T) -> Result<usize, TieredVectorError<T>> {
+        // @todo: why loop through every tier for every insert? find a different way to return this error
         if rank > self.len() {
             return Err(TieredVectorError::TieredVectorOutofBoundsInsertionError(
                 rank, elem,
