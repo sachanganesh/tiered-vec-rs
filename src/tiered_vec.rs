@@ -53,7 +53,7 @@ where
     }
 
     #[inline(always)]
-    fn tier_size(&self) -> usize {
+    pub fn tier_size(&self) -> usize {
         self.tiers.len()
     }
 
@@ -88,7 +88,7 @@ where
     }
 
     pub fn is_full(&self) -> bool {
-        self.len() == self.capacity()
+        self.tiers[self.tiers.len() - 1].is_full()
     }
 
     pub fn get_by_rank(&self, rank: usize) -> Option<&T> {
@@ -120,9 +120,9 @@ where
         }
     }
 
-    fn try_contract(&mut self) {
+    fn try_contract(&mut self, num_entries: usize) {
         // only contract well below capacity to cull repeated alloc/free of memory upon reinsertion/redeletion
-        if self.len() < self.capacity() / 8 {
+        if num_entries < self.capacity() / 8 {
             let new_tier_size = self.tier_size() >> 1;
             let _ = self.tiers.split_off(new_tier_size >> 1);
 
@@ -141,13 +141,14 @@ where
 
     pub fn insert(&mut self, rank: usize, elem: T) -> Result<usize, TieredVectorError<T>> {
         // @todo: why loop through every tier for every insert? find a different way to return this error
-        if rank > self.len() {
+        let num_entries = self.len();
+        if rank > num_entries {
             return Err(TieredVectorError::TieredVectorOutofBoundsInsertionError(
                 rank, elem,
             ));
         }
 
-        if self.is_full() {
+        if num_entries == self.capacity() {
             self.expand();
         }
 
@@ -196,11 +197,12 @@ where
     }
 
     pub fn remove(&mut self, rank: usize) -> Result<T, TieredVectorError<T>> {
-        if rank > self.len() {
+        let num_entries = self.len();
+        if rank > num_entries {
             return Err(TieredVectorError::TieredVectorRankOutOfBoundsError(rank));
         }
 
-        self.try_contract();
+        self.try_contract(num_entries);
 
         let tier_idx = self.tier_idx(rank);
         let mut prev_popped = None;
@@ -219,8 +221,10 @@ where
             Err(_) => unreachable!(),
 
             Ok(removed) => {
+                let last_tier_idx = self.tier_idx(num_entries);
+
                 // pop-push phase
-                for i in (tier_idx + 1..self.tiers.len()).rev() {
+                for i in (tier_idx + 1..last_tier_idx + 1).rev() {
                     let tier = self.tiers.get_mut(i).expect("tier at index does not exist");
 
                     if let Ok(popped) = tier.pop_front() {
