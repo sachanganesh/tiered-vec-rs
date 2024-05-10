@@ -1,24 +1,17 @@
-use std::{
-    fmt::Debug,
-    mem::{self, MaybeUninit},
-};
+use std::{fmt::Debug, mem::MaybeUninit};
 
 use crate::error::{TierError, TieredVectorError};
 
 use super::{tier::ImplicitTier, tier_ring_offsets::ImplicitTierRingOffsets};
 
-#[derive(Clone)]
-pub struct ImplicitTieredVec<T>
-where
-    T: Copy,
-{
+pub struct ImplicitTieredVec<T> {
     offsets: Vec<ImplicitTierRingOffsets>,
     buffer: Vec<MaybeUninit<T>>,
 }
 
 impl<T> ImplicitTieredVec<T>
 where
-    T: Copy + Debug + Send + Sync + 'static,
+    T: Clone + Debug,
 {
     pub fn new(initial_tier_size: usize) -> Self {
         assert!(initial_tier_size.is_power_of_two());
@@ -157,7 +150,7 @@ where
             self.offsets.push(Default::default());
         }
         self.buffer
-            .resize(new_tier_size.pow(2), MaybeUninit::uninit());
+            .resize_with(new_tier_size.pow(2), MaybeUninit::uninit);
     }
 
     fn try_contract(&mut self, num_entries: usize) {
@@ -249,33 +242,10 @@ where
 
         self.try_contract(num_entries);
 
-        // get last valid tier
-        // if target_tier is same as last_tier
-        //      remove element and shift remaining over
-        // else
-        //      let t = target_tier
-        //      let mut u = t.next_tier()
-        //      let removed = t.remove(masked_rank)
-        //
-        //      while u != last_tier:
-        //          mem::swap(t.tail(), u.head())
-        //
-        //          t.tail_forward()
-        //          t = u
-        //          u = t.next_tier()
-        //
-        //      mem::swap(t.tail(), u.head())
-        //      t.tail_forward()
-        //      u.head_forward()
-        //
-        //      return removed
+        let mut prev_popped = None;
 
-        // println!("BEFORE");
-        // for (i, o) in self.offsets.iter().enumerate() {
-        //     println!("offset {}: {:?}", i, o);
-        // }
-
-        let mut offset_idx = self.tier_idx(rank);
+        // shift phase
+        let offset_idx = self.tier_idx(rank);
 
         let tier_size = self.tier_size();
         let tier_idx = offset_idx * tier_size;
@@ -292,118 +262,46 @@ where
             Err(_) => unreachable!(),
 
             Ok(removed) => {
-                // println!("DURING");
-                // for (i, o) in self.offsets.iter().enumerate() {
-                //     println!("offset {}: {:?}", i, o);
-                // }
+                let last_tier_idx = self.tier_idx(num_entries);
 
-                let last_offset_idx = self.tier_idx(num_entries - 1);
+                // pop-push phase
+                for i in (offset_idx + 1..last_tier_idx + 1).rev() {
+                    let start_idx = i * tier_size;
+                    let end_idx = start_idx + tier_size;
 
-                if offset_idx != last_offset_idx {
-                    //      let t = target_tier
-                    //      let mut u = t.next_tier()
-                    //      let removed = t.remove(masked_rank)
-                    //
-                    //      while u != last_tier:
-                    //          mem::swap(t.tail(), u.head())
-                    //
-                    //          t.tail_forward()
-                    //          t = u
-                    //          u = t.next_tier()
-                    //
-                    //      mem::swap(t.tail(), u.head())
-                    //      t.tail_forward()
-                    //      u.head_forward()
-                    //
-                    //      return removed
+                    let tier = &mut self.buffer[start_idx..end_idx];
+                    let ring_offsets = &mut self.offsets[i];
 
-                    for cursor_offset_idx in offset_idx..last_offset_idx {
-                        let next_offset_idx = cursor_offset_idx + 1;
+                    if let Ok(popped) = ImplicitTier::pop_front(tier, ring_offsets) {
+                        if let Some(prev_elem) = prev_popped {
+                            ImplicitTier::push_back(tier, ring_offsets, prev_elem)
+                                .expect("tier did not have space despite prior call to `pop_back`");
+                        }
 
-                        let cursor_offsets = &self.offsets[cursor_offset_idx];
-                        let next_offsets = &self.offsets[next_offset_idx];
-
-                        let cursor_idx =
-                            (cursor_offset_idx * tier_size) + cursor_offsets.masked_tail(tier_size);
-                        let next_idx =
-                            (next_offset_idx * tier_size) + next_offsets.masked_head(tier_size);
-
-                        // println!(
-                        //     "swapping {} with {} / {} / {}",
-                        //     cursor_idx,
-                        //     next_idx,
-                        //     num_entries - 1,
-                        //     self.buffer.len()
-                        // );
-                        self.buffer.swap(cursor_idx, next_idx);
+                        prev_popped = Some(popped);
                     }
+                }
 
-                    self.offsets[offset_idx].tail_forward();
-                    self.offsets[last_offset_idx].head_forward();
+                if let Some(popped) = prev_popped {
+                    let target_tier = &mut self.buffer[tier_idx..tier_idx_end];
+                    let target_ring_offsets = &mut self.offsets[offset_idx];
 
-                    // println!("AFTER");
-                    // for (i, o) in self.offsets.iter().enumerate() {
-                    //     println!("offset {}: {:?}", i, o);
-                    // }
+                    ImplicitTier::push_back(target_tier, target_ring_offsets, popped)
+                        .expect("tier did not have space despite prior removal");
                 }
 
                 Ok(removed)
             }
         }
+    }
+}
 
-        //============================================
-
-        // let mut prev_popped = None;
-
-        // // shift phase
-        // let offset_idx = self.tier_idx(rank);
-
-        // let tier_size = self.tier_size();
-        // let tier_idx = offset_idx * tier_size;
-        // let tier_idx_end = tier_idx + tier_size;
-
-        // let target_tier = &mut self.buffer[tier_idx..tier_idx_end];
-        // let target_ring_offsets = &mut self.offsets[offset_idx];
-
-        // match ImplicitTier::remove(target_tier, target_ring_offsets, rank) {
-        //     Err(TierError::TierEmptyError) => Err(TieredVectorError::TieredVectorEmptyError),
-        //     Err(TierError::TierRankOutOfBoundsError(r)) => {
-        //         Err(TieredVectorError::TieredVectorRankOutOfBoundsError(r))
-        //     }
-        //     Err(_) => unreachable!(),
-
-        //     Ok(removed) => {
-        //         let last_tier_idx = self.tier_idx(num_entries);
-
-        //         // pop-push phase
-        //         for i in (offset_idx + 1..last_tier_idx + 1).rev() {
-        //             let start_idx = i * tier_size;
-        //             let end_idx = start_idx + tier_size;
-
-        //             let tier = &mut self.buffer[start_idx..end_idx];
-        //             let ring_offsets = &mut self.offsets[i];
-
-        //             if let Ok(popped) = ImplicitTier::pop_front(tier, ring_offsets) {
-        //                 if let Some(prev_elem) = prev_popped {
-        //                     ImplicitTier::push_back(tier, ring_offsets, prev_elem)
-        //                         .expect("tier did not have space despite prior call to `pop_back`");
-        //                 }
-
-        //                 prev_popped = Some(popped);
-        //             }
-        //         }
-
-        //         if let Some(popped) = prev_popped {
-        //             let target_tier = &mut self.buffer[tier_idx..tier_idx_end];
-        //             let target_ring_offsets = &mut self.offsets[offset_idx];
-
-        //             ImplicitTier::push_back(target_tier, target_ring_offsets, popped)
-        //                 .expect("tier did not have space despite prior removal");
-        //         }
-
-        //         Ok(removed)
-        //     }
-        // }
+impl<T: Copy> Clone for ImplicitTieredVec<T> {
+    fn clone(&self) -> Self {
+        Self {
+            offsets: self.offsets.clone(),
+            buffer: self.buffer.clone(),
+        }
     }
 }
 
