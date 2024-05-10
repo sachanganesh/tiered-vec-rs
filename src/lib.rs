@@ -1,9 +1,10 @@
 #![allow(dead_code)]
 
-pub(crate) mod tier;
-pub mod tier_error;
 mod tiered_vec;
 
-// mod implicit;
+pub(crate) mod tier;
+
+pub mod error;
+pub mod implicit;
 
 pub use tiered_vec::*;

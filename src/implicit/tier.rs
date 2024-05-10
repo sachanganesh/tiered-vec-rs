@@ -1,19 +1,19 @@
 use std::{fmt::Debug, marker::PhantomData, mem::MaybeUninit};
 
-use crate::tier_error::TierError;
+use crate::error::TierError;
 
 use super::tier_ring_offsets::ImplicitTierRingOffsets;
 
 pub struct ImplicitTier<T>
 where
-    T: Clone + Debug,
+    T: Debug,
 {
     marker: PhantomData<T>,
 }
 
 impl<T> ImplicitTier<T>
 where
-    T: Clone + Debug,
+    T: Debug,
 {
     #[inline(always)]
     pub const fn capacity(tier: &[MaybeUninit<T>]) -> usize {
@@ -87,11 +87,8 @@ where
         ring_offsets: &ImplicitTierRingOffsets,
         rank: usize,
     ) -> Option<&'a T> {
-        Self::get(
-            tier,
-            ring_offsets,
-            ring_offsets.masked_rank(rank, Self::capacity(tier)),
-        )
+        let masked_rank = ring_offsets.masked_rank(rank, Self::capacity(tier));
+        Self::get(tier, ring_offsets, masked_rank)
     }
 
     pub fn get_mut_by_rank<'a>(
@@ -118,15 +115,18 @@ where
         ring_offsets.set_head(0);
     }
 
+    #[inline]
     fn set(tier: &mut [MaybeUninit<T>], masked_idx: usize, elem: T) -> &mut T {
         tier[masked_idx].write(elem)
     }
 
+    #[inline]
     fn take(tier: &mut [MaybeUninit<T>], masked_idx: usize) -> T {
         let slot = &mut tier[masked_idx];
         unsafe { std::mem::replace(slot, MaybeUninit::zeroed()).assume_init() }
     }
 
+    #[inline]
     fn replace(tier: &mut [MaybeUninit<T>], masked_idx: usize, elem: T) -> T {
         let slot = &mut tier[masked_idx];
         unsafe { std::mem::replace(slot, MaybeUninit::new(elem)).assume_init() }
@@ -338,6 +338,36 @@ where
             Err(TierError::TierRankOutOfBoundsError(rank))
         }
     }
+
+    pub fn merge_neighbors(
+        joint_tier: &mut [MaybeUninit<T>],
+        first_ring_offsets: &mut ImplicitTierRingOffsets,
+        second_ring_offsets: &mut ImplicitTierRingOffsets,
+    ) {
+        let tier_size = joint_tier.len() / 2;
+
+        Self::rotate_reset(&mut joint_tier[..tier_size], first_ring_offsets);
+        Self::rotate_reset(&mut joint_tier[tier_size..], second_ring_offsets);
+
+        first_ring_offsets.set_tail(first_ring_offsets.len() + second_ring_offsets.len());
+    }
+
+    pub fn split_half(
+        tier: &mut [MaybeUninit<T>],
+        ring_offsets: &mut ImplicitTierRingOffsets,
+    ) -> ImplicitTierRingOffsets {
+        Self::rotate_reset(tier, ring_offsets);
+
+        if ring_offsets.len() >= tier.len() / 2 {
+            let count = ring_offsets.len();
+
+            ring_offsets.set_tail(tier.len() / 2);
+
+            ImplicitTierRingOffsets::new(0, count - tier.len() / 2)
+        } else {
+            ImplicitTierRingOffsets::new(0, 0)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -359,7 +389,7 @@ mod tests {
 
     #[test]
     fn no_error_on_correct_tier_size() {
-        let mut s = prepare_slice(4);
+        let s = prepare_slice(4);
         assert_eq!(ImplicitTier::capacity(&s), 4);
     }
 

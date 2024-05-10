@@ -1,10 +1,14 @@
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct ImplicitTierRingOffsets {
     head: usize,
     tail: usize,
 }
 
 impl ImplicitTierRingOffsets {
+    pub fn new(head: usize, tail: usize) -> Self {
+        Self { head, tail }
+    }
+
     #[inline(always)]
     pub const fn len(&self) -> usize {
         self.tail.wrapping_sub(self.head)
