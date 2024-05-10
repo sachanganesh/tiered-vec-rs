@@ -4,14 +4,18 @@ use crate::error::{TierError, TieredVectorError};
 
 use super::{tier::ImplicitTier, tier_ring_offsets::ImplicitTierRingOffsets};
 
-pub struct ImplicitTieredVec<T> {
+#[derive(Clone)]
+pub struct ImplicitTieredVec<T>
+where
+    T: Copy,
+{
     offsets: Vec<ImplicitTierRingOffsets>,
     buffer: Vec<MaybeUninit<T>>,
 }
 
-impl<T: Copy> ImplicitTieredVec<T>
+impl<T> ImplicitTieredVec<T>
 where
-    T: Debug + Send + Sync + 'static,
+    T: Copy + Debug + Send + Sync + 'static,
 {
     pub fn new(initial_tier_size: usize) -> Self {
         assert!(initial_tier_size.is_power_of_two());
@@ -99,7 +103,7 @@ where
     }
 
     #[inline]
-    fn tier_size(&self) -> usize {
+    pub fn tier_size(&self) -> usize {
         self.num_tiers()
     }
 
@@ -153,9 +157,9 @@ where
             .resize(new_tier_size.pow(2), MaybeUninit::uninit());
     }
 
-    fn try_contract(&mut self) {
+    fn try_contract(&mut self, num_entries: usize) {
         // only contract well below capacity to cull repeated alloc/free of memory upon reinsertion/redeletion
-        if self.len() < self.capacity() / 8 {
+        if num_entries < self.capacity() / 8 {
             let curr_tier_size = self.tier_size();
             let new_tier_size = curr_tier_size >> 1;
 
@@ -180,36 +184,39 @@ where
     }
 
     pub fn insert(&mut self, rank: usize, elem: T) -> Result<usize, TieredVectorError<T>> {
-        if rank > self.len() {
+        let num_entries = self.len();
+        if rank > num_entries {
             return Err(TieredVectorError::TieredVectorOutofBoundsInsertionError(
                 rank, elem,
             ));
         }
 
-        if self.is_full() {
+        if num_entries == self.capacity() {
             self.expand();
         }
 
         let offset_idx = self.tier_idx(rank);
-        let num_tiers = self.tier_size();
+        let tier_size = self.tier_size();
         let mut prev_popped = None;
 
-        // @todo: we should be able to mem::swap all entries in succession
         // pop-push phase
-        if self.offsets[offset_idx].is_full(num_tiers) {
-            for i in offset_idx..num_tiers {
-                let start_idx = i * num_tiers;
-                let end_idx = start_idx + num_tiers;
+        if self.offsets[offset_idx].is_full(tier_size) {
+            for i in offset_idx..tier_size {
+                let start_idx = i * tier_size;
+                let end_idx = start_idx + tier_size;
                 let tier = &mut self.buffer[start_idx..end_idx];
                 let ring_offsets = &mut self.offsets[i];
 
-                if let Ok(popped) = ImplicitTier::pop_front(tier, ring_offsets) {
-                    if let Some(prev_elem) = prev_popped {
-                        ImplicitTier::push_back(tier, ring_offsets, prev_elem)
-                            .expect("tier did not have space despite prior call to `pop_front`");
-                    }
+                if ring_offsets.is_full(tier.len()) {
+                    if let Ok(popped) = ImplicitTier::pop_front(tier, ring_offsets) {
+                        if let Some(prev_elem) = prev_popped {
+                            ImplicitTier::push_back(tier, ring_offsets, prev_elem).expect(
+                                "tier did not have space despite prior call to `pop_front`",
+                            );
+                        }
 
-                    prev_popped = Some(popped);
+                        prev_popped = Some(popped);
+                    }
                 } else {
                     if let Some(prev_elem) = prev_popped.take() {
                         ImplicitTier::push_back(tier, ring_offsets, prev_elem)
@@ -220,8 +227,8 @@ where
         }
 
         // shift phase
-        let tier_idx = offset_idx * num_tiers;
-        let tier_idx_end = tier_idx + num_tiers;
+        let tier_idx = offset_idx * tier_size;
+        let tier_idx_end = tier_idx + tier_size;
 
         let tier = &mut self.buffer[tier_idx..tier_idx_end];
         let ring_offsets = &mut self.offsets[offset_idx];
@@ -232,19 +239,21 @@ where
     }
 
     pub fn remove(&mut self, rank: usize) -> Result<T, TieredVectorError<T>> {
-        if rank > self.len() {
+        let num_entries = self.len();
+        if rank > num_entries {
             return Err(TieredVectorError::TieredVectorRankOutOfBoundsError(rank));
         }
 
-        self.try_contract();
+        self.try_contract(num_entries);
 
         let mut prev_popped = None;
-        let num_tiers = self.num_tiers();
 
         // shift phase
         let offset_idx = self.tier_idx(rank);
-        let tier_idx = offset_idx * self.tier_size();
-        let tier_idx_end = tier_idx + self.tier_size();
+
+        let tier_size = self.tier_size();
+        let tier_idx = offset_idx * tier_size;
+        let tier_idx_end = tier_idx + tier_size;
 
         let target_tier = &mut self.buffer[tier_idx..tier_idx_end];
         let target_ring_offsets = &mut self.offsets[offset_idx];
@@ -257,10 +266,12 @@ where
             Err(_) => unreachable!(),
 
             Ok(removed) => {
+                let last_tier_idx = self.tier_idx(num_entries);
+
                 // pop-push phase
-                for i in (offset_idx + 1..num_tiers).rev() {
-                    let start_idx = i * num_tiers;
-                    let end_idx = start_idx + num_tiers;
+                for i in (offset_idx + 1..last_tier_idx + 1).rev() {
+                    let start_idx = i * tier_size;
+                    let end_idx = start_idx + tier_size;
 
                     let tier = &mut self.buffer[start_idx..end_idx];
                     let ring_offsets = &mut self.offsets[i];
