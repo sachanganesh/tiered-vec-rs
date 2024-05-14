@@ -235,6 +235,8 @@ where
         if let Some(curr_elem) = cursor {
             self.set_element(i, curr_elem);
         }
+
+        self.head_backward();
     }
 
     fn shift_to_tail(&mut self, from: usize) {
@@ -242,7 +244,7 @@ where
         let mut cursor: Option<T> = None;
         let mut i = from;
 
-        while i < masked_tail {
+        while i != masked_tail {
             if let Some(curr_elem) = cursor {
                 cursor = Some(self.replace_element(i, curr_elem));
             } else {
@@ -254,8 +256,9 @@ where
 
         if let Some(curr_elem) = cursor {
             self.set_element(i, curr_elem);
-            self.tail_forward();
         }
+
+        self.tail_forward();
     }
 
     pub fn insert(&mut self, rank: usize, elem: T) {
@@ -266,15 +269,13 @@ where
         let masked_rank = self.masked_rank(rank);
 
         if masked_tail == masked_rank {
-            self.push_back(elem)
+            self.push_back(elem);
+        } else if masked_head == masked_rank {
+            self.push_front(elem);
         } else {
-            if masked_head == masked_rank {
-                self.push_front(elem)
-            } else {
-                self.shift_to_tail(masked_rank);
+            self.shift_to_tail(masked_rank);
 
-                self.set_element(masked_rank, elem);
-            }
+            self.set_element(masked_rank, elem);
         }
     }
 
