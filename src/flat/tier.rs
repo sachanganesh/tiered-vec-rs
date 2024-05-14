@@ -1,25 +1,17 @@
-use std::fmt::Write;
 use std::{
     alloc::{Layout, LayoutError},
-    fmt::Debug,
     mem::{size_of, MaybeUninit},
     ops::{Index, IndexMut},
 };
 
 #[repr(C)]
-pub struct Tier<T>
-where
-    T: Debug,
-{
+pub struct Tier<T> {
     head: usize,
     tail: usize,
     pub(crate) elements: [MaybeUninit<T>],
 }
 
-impl<T> Tier<T>
-where
-    T: Debug,
-{
+impl<T> Tier<T> {
     #[inline]
     pub fn size_of_metadata() -> usize {
         size_of::<usize>() * 2
@@ -235,8 +227,6 @@ where
         if let Some(curr_elem) = cursor {
             self.set_element(i, curr_elem);
         }
-
-        self.head_backward();
     }
 
     fn shift_to_tail(&mut self, from: usize) {
@@ -318,10 +308,7 @@ where
     }
 }
 
-impl<T> Index<usize> for Tier<T>
-where
-    T: Debug,
-{
+impl<T> Index<usize> for Tier<T> {
     type Output = T;
 
     fn index(&self, rank: usize) -> &Self::Output {
@@ -329,37 +316,9 @@ where
     }
 }
 
-impl<T> IndexMut<usize> for Tier<T>
-where
-    T: Debug,
-{
+impl<T> IndexMut<usize> for Tier<T> {
     fn index_mut(&mut self, rank: usize) -> &mut Self::Output {
         unsafe { self.elements[self.masked_rank(rank)].assume_init_mut() }
-    }
-}
-
-impl<T> Debug for Tier<T>
-where
-    T: Debug,
-{
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        formatter.write_char('[')?;
-
-        for i in 0..self.elements.len() {
-            if let Some(elem) = self.get(i) {
-                formatter.write_str(format!("{:?}", elem).as_str())?;
-            } else {
-                formatter.write_str("_")?;
-            }
-
-            if i != self.elements.len() - 1 {
-                formatter.write_str(", ")?;
-            }
-        }
-
-        formatter.write_char(']')?;
-
-        Ok(())
     }
 }
 

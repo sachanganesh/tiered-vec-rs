@@ -1,6 +1,5 @@
 use std::{
-    alloc::{alloc_zeroed, realloc, Layout, LayoutError},
-    fmt::Debug,
+    alloc::{alloc_zeroed, dealloc, realloc, Layout, LayoutError},
     marker::PhantomData,
     ops::{Index, IndexMut},
     ptr,
@@ -8,20 +7,14 @@ use std::{
 
 use super::tier::Tier;
 
-pub struct FlatTieredVec<T>
-where
-    T: Debug,
-{
+pub struct FlatTieredVec<T> {
     ptr: *mut u8,
     tier_capacity: usize,
     len: usize,
     marker: PhantomData<T>,
 }
 
-impl<T> FlatTieredVec<T>
-where
-    T: Debug,
-{
+impl<T> FlatTieredVec<T> {
     pub fn new(tier_capacity: usize) -> Self {
         assert!(tier_capacity.is_power_of_two());
         assert!(tier_capacity.ge(&2));
@@ -81,22 +74,17 @@ where
     }
 
     #[inline]
-    const fn mask(&self, val: usize) -> usize {
-        val & (self.num_tiers() - 1)
-    }
-
-    #[inline]
-    const fn num_tiers(&self) -> usize {
-        self.tier_capacity
-    }
-
-    #[inline]
     pub const fn tier_capacity(&self) -> usize {
         self.tier_capacity
     }
 
     #[inline]
-    pub fn len(&self) -> usize {
+    const fn num_tiers(&self) -> usize {
+        self.tier_capacity()
+    }
+
+    #[inline]
+    pub const fn len(&self) -> usize {
         self.len
     }
 
@@ -132,14 +120,6 @@ where
         assert_eq!(self.tier_capacity(), tier.elements.len());
 
         return tier;
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &Tier<T>> {
-        (0..self.num_tiers()).map(move |i| unsafe { &*self.raw_tier_ptr(i) })
-    }
-
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Tier<T>> {
-        (0..self.num_tiers()).map(move |i| unsafe { &mut *self.raw_tier_ptr(i) })
     }
 
     #[inline]
@@ -232,6 +212,7 @@ where
             self.expand();
         }
 
+        // pop-push phase
         let tier_index = self.tier_index(index);
         let mut prev_popped = None;
 
@@ -255,6 +236,7 @@ where
             }
         }
 
+        // shift phase
         self.tier_mut(tier_index).insert(index, elem);
         self.len += 1;
     }
@@ -343,10 +325,7 @@ where
     // }
 }
 
-impl<T> Index<usize> for FlatTieredVec<T>
-where
-    T: Debug,
-{
+impl<T> Index<usize> for FlatTieredVec<T> {
     type Output = T;
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -355,19 +334,31 @@ where
     }
 }
 
-impl<T> IndexMut<usize> for FlatTieredVec<T>
-where
-    T: Debug,
-{
+impl<T> IndexMut<usize> for FlatTieredVec<T> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         assert!(index < self.len());
         &mut self.tier_mut(self.tier_index(index))[index]
     }
 }
 
+impl<T> Drop for FlatTieredVec<T> {
+    fn drop(&mut self) {
+        for _ in 0..self.len() {
+            self.pop();
+        }
+
+        unsafe {
+            dealloc(
+                self.ptr,
+                Self::layout_for(self.tier_capacity).expect("current layout should be valid"),
+            );
+        }
+    }
+}
+
 impl<T> Clone for FlatTieredVec<T>
 where
-    T: Clone + Debug,
+    T: Clone,
 {
     fn clone(&self) -> Self {
         let layout = Self::layout_for(self.tier_capacity())
