@@ -17,6 +17,7 @@ where
 {
     ptr: *mut u8,
     tier_capacity: usize,
+    len: usize,
     marker: PhantomData<T>,
 }
 
@@ -36,6 +37,7 @@ where
         Self {
             ptr: buffer_ptr,
             tier_capacity,
+            len: 0,
             marker: PhantomData,
         }
     }
@@ -97,6 +99,11 @@ where
     }
 
     #[inline]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline]
     const fn tier_index(&self, rank: usize) -> usize {
         rank / self.tier_capacity()
     }
@@ -138,30 +145,14 @@ where
         (0..self.num_tiers()).map(move |i| unsafe { &mut *self.raw_tier_ptr(i) })
     }
 
-    pub fn len(&self) -> usize {
-        let mut l = 0;
-
-        for tier in self.iter() {
-            let tier_len = tier.len();
-
-            if tier_len == 0 {
-                break;
-            }
-
-            l += tier_len;
-        }
-
-        return l;
-    }
-
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.tier(0).is_empty()
+        self.len() == 0
     }
 
     #[inline]
     pub fn is_full(&self) -> bool {
-        self.tier(self.num_tiers() - 1).is_full()
+        self.len() == self.capacity()
     }
 
     pub fn get(&self, index: usize) -> Option<&T> {
@@ -235,11 +226,9 @@ where
     }
 
     pub fn insert(&mut self, index: usize, elem: T) {
-        let num_entries = self.len();
+        assert!(index <= self.len());
 
-        assert!(index <= num_entries);
-
-        if num_entries == self.capacity() {
+        if self.is_full() {
             self.expand();
         }
 
@@ -267,6 +256,7 @@ where
         }
 
         self.tier_mut(tier_index).insert(index, elem);
+        self.len += 1;
     }
 
     pub fn remove(&mut self, index: usize) -> T {
