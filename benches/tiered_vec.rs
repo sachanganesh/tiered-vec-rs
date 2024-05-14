@@ -1,17 +1,21 @@
-use ::tiered_vec::{FlatTieredVec, ImplicitTieredVec, TieredVec};
+use ::tiered_vec::{FlatTieredVec, ImplicitTieredVec, LinkedTieredVec};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::rngs::SmallRng;
 use rand::SeedableRng;
 
-mod tiered_vec {
+mod linked_tiered_vec {
     use rand::{
         distributions::{Distribution, WeightedIndex},
         rngs::SmallRng,
         Rng,
     };
-    use tiered_vec::TieredVec;
+    use tiered_vec::LinkedTieredVec;
 
-    pub fn insert(mut rng: SmallRng, tiered_vec: &mut TieredVec<usize>, num_insertions: usize) {
+    pub fn insert(
+        mut rng: SmallRng,
+        tiered_vec: &mut LinkedTieredVec<usize>,
+        num_insertions: usize,
+    ) {
         let mut i = 0;
 
         for j in 0..num_insertions {
@@ -23,7 +27,7 @@ mod tiered_vec {
         }
     }
 
-    pub fn update(mut rng: SmallRng, tiered_vec: &mut TieredVec<usize>, num_updates: usize) {
+    pub fn update(mut rng: SmallRng, tiered_vec: &mut LinkedTieredVec<usize>, num_updates: usize) {
         for i in 0..num_updates {
             *tiered_vec
                 .get_mut_by_rank(rng.gen_range(0..tiered_vec.len()))
@@ -31,10 +35,10 @@ mod tiered_vec {
         }
     }
 
-    pub fn delete(mut rng: SmallRng, tiered_vec: &mut TieredVec<usize>, num_deletes: usize) {
+    pub fn delete(mut rng: SmallRng, tiered_vec: &mut LinkedTieredVec<usize>, num_deletes: usize) {
         let mut len = tiered_vec.len();
 
-        for i in 0..num_deletes {
+        for _ in 0..num_deletes {
             let gen = rng.gen_range(0..len);
 
             tiered_vec
@@ -45,7 +49,11 @@ mod tiered_vec {
         }
     }
 
-    pub fn random_mix(mut rng: SmallRng, tiered_vec: &mut TieredVec<usize>, num_operations: usize) {
+    pub fn random_mix(
+        mut rng: SmallRng,
+        tiered_vec: &mut LinkedTieredVec<usize>,
+        num_operations: usize,
+    ) {
         let mut len = tiered_vec.len();
         let mut weights = [tiered_vec.capacity() - len, len, len];
         let mut dist = WeightedIndex::new(&weights).unwrap();
@@ -118,7 +126,7 @@ mod flat_tiered_vec {
     pub fn delete(mut rng: SmallRng, tiered_vec: &mut FlatTieredVec<usize>, num_deletes: usize) {
         let mut len = tiered_vec.len();
 
-        for i in 0..num_deletes {
+        for _ in 0..num_deletes {
             let gen = rng.gen_range(0..len);
 
             tiered_vec.remove(gen);
@@ -214,7 +222,7 @@ mod implicit_tiered_vec {
     ) {
         let mut len = tiered_vec.len();
 
-        for i in 0..num_deletes {
+        for _ in 0..num_deletes {
             let gen = rng.gen_range(0..len);
 
             tiered_vec
@@ -343,11 +351,11 @@ mod vec {
     }
 }
 
-fn bench_insertion(c: &mut Criterion) {
+fn bench_insert(c: &mut Criterion) {
     let mut group = c.benchmark_group("Insertion");
 
     let vec_size: usize = 1_000;
-    let mut tv = TieredVec::with_minimum_capacity(vec_size);
+    let mut tv = LinkedTieredVec::with_minimum_capacity(vec_size);
     let mut itv = ImplicitTieredVec::new(tv.tier_size());
     let mut ftv = FlatTieredVec::new(tv.tier_size());
     let mut v: Vec<_> = Vec::with_capacity(tv.capacity());
@@ -359,10 +367,10 @@ fn bench_insertion(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("TieredVec", |b| {
+    group.bench_function("LinkedTieredVec", |b| {
         b.iter(|| {
             let rng = SmallRng::seed_from_u64(256);
-            tiered_vec::insert(black_box(rng), black_box(&mut tv), vec_size);
+            linked_tiered_vec::insert(black_box(rng), black_box(&mut tv), vec_size);
         })
     });
 
@@ -389,7 +397,7 @@ fn bench_update(c: &mut Criterion) {
     let mut group = c.benchmark_group("Update");
 
     let vec_size: usize = 100_000;
-    let mut tv = TieredVec::with_minimum_capacity(vec_size);
+    let mut tv = LinkedTieredVec::with_minimum_capacity(vec_size);
     let mut itv = ImplicitTieredVec::new(tv.tier_size());
     let mut ftv = FlatTieredVec::new(tv.tier_size());
     let mut v: Vec<_> = Vec::with_capacity(tv.capacity());
@@ -415,17 +423,17 @@ fn bench_update(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("TieredVec 50%", |b| {
+    group.bench_function("LinkedTieredVec 50%", |b| {
         b.iter(|| {
             let rng = SmallRng::seed_from_u64(256);
-            tiered_vec::update(black_box(rng), black_box(&mut tv), vec_size / 2);
+            linked_tiered_vec::update(black_box(rng), black_box(&mut tv), vec_size / 2);
         })
     });
 
-    group.bench_function("TieredVec 75%", |b| {
+    group.bench_function("LinkedTieredVec 75%", |b| {
         b.iter(|| {
             let rng = SmallRng::seed_from_u64(256);
-            tiered_vec::update(black_box(rng), black_box(&mut tv), vec_size * 3 / 4);
+            linked_tiered_vec::update(black_box(rng), black_box(&mut tv), vec_size * 3 / 4);
         })
     });
 
@@ -466,7 +474,7 @@ fn bench_delete(c: &mut Criterion) {
     let mut group = c.benchmark_group("Delete");
 
     let vec_size: usize = 10_000;
-    let mut tv = TieredVec::with_minimum_capacity(vec_size);
+    let mut tv = LinkedTieredVec::with_minimum_capacity(vec_size);
     let mut itv = ImplicitTieredVec::new(tv.tier_size());
     let mut ftv = FlatTieredVec::new(tv.tier_size());
     let mut v: Vec<_> = Vec::with_capacity(tv.capacity());
@@ -492,17 +500,17 @@ fn bench_delete(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("TieredVec 50%", |b| {
+    group.bench_function("LinkedTieredVec 50%", |b| {
         b.iter(|| {
             let rng = SmallRng::seed_from_u64(256);
-            tiered_vec::delete(black_box(rng), black_box(&mut tv.clone()), vec_size / 2);
+            linked_tiered_vec::delete(black_box(rng), black_box(&mut tv.clone()), vec_size / 2);
         })
     });
 
-    group.bench_function("TieredVec 75%", |b| {
+    group.bench_function("LinkedTieredVec 75%", |b| {
         b.iter(|| {
             let rng = SmallRng::seed_from_u64(256);
-            tiered_vec::delete(black_box(rng), black_box(&mut tv.clone()), vec_size * 3 / 4);
+            linked_tiered_vec::delete(black_box(rng), black_box(&mut tv.clone()), vec_size * 3 / 4);
         })
     });
 
@@ -551,7 +559,7 @@ fn bench_random_mix(c: &mut Criterion) {
     let mut group = c.benchmark_group("Random Mix");
 
     let vec_size: usize = 50;
-    let tv: TieredVec<usize> = TieredVec::with_minimum_capacity(vec_size);
+    let tv: LinkedTieredVec<usize> = LinkedTieredVec::with_minimum_capacity(vec_size);
     let itv: ImplicitTieredVec<usize> = ImplicitTieredVec::new(tv.tier_size());
     let ftv: FlatTieredVec<usize> = FlatTieredVec::new(tv.tier_size());
     let mut v: Vec<usize> = Vec::with_capacity(tv.capacity());
@@ -563,10 +571,10 @@ fn bench_random_mix(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("TieredVec", |b| {
+    group.bench_function("LinkedTieredVec", |b| {
         b.iter(|| {
             let rng = SmallRng::seed_from_u64(256);
-            tiered_vec::random_mix(black_box(rng), black_box(&mut tv.clone()), 1_000_000);
+            linked_tiered_vec::random_mix(black_box(rng), black_box(&mut tv.clone()), 1_000_000);
         })
     });
 
@@ -589,5 +597,11 @@ fn bench_random_mix(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_insertion);
+criterion_group!(
+    benches,
+    bench_insert,
+    bench_update,
+    bench_delete,
+    bench_random_mix
+);
 criterion_main!(benches);
