@@ -4,14 +4,14 @@ use super::error::{TierError, TieredVectorError};
 use super::tier::Tier;
 
 #[derive(Clone)]
-pub struct TieredVec<T>
+pub struct LinkedTieredVec<T>
 where
     T: Clone + Debug,
 {
     pub(crate) tiers: Vec<Tier<T>>,
 }
 
-impl<T> TieredVec<T>
+impl<T> LinkedTieredVec<T>
 where
     T: Clone + Debug,
 {
@@ -250,7 +250,7 @@ where
     }
 }
 
-impl<T: Clone + Debug> Debug for TieredVec<T> {
+impl<T: Clone + Debug> Debug for LinkedTieredVec<T> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_char('[')?;
 
@@ -287,19 +287,19 @@ mod tests {
     #[test]
     #[should_panic]
     fn error_on_non_power_of_two_size() {
-        let _t: TieredVec<usize> = TieredVec::new(5);
+        let _t: LinkedTieredVec<usize> = LinkedTieredVec::new(5);
     }
 
     #[test]
     #[should_panic]
     fn error_on_small_size() {
-        let _t: TieredVec<usize> = TieredVec::new(1);
+        let _t: LinkedTieredVec<usize> = LinkedTieredVec::new(1);
     }
 
     #[test]
     fn no_error_on_correct_size() {
         let size = 4;
-        let t: TieredVec<usize> = TieredVec::new(size);
+        let t: LinkedTieredVec<usize> = LinkedTieredVec::new(size);
         assert_eq!(t.len(), 0);
         assert_eq!(t.capacity(), size * size);
         assert_eq!(t.tier_size(), size);
@@ -309,15 +309,15 @@ mod tests {
 
     #[test]
     fn with_minimum_capacity() {
-        let mut t: TieredVec<usize> = TieredVec::with_minimum_capacity(4);
+        let mut t: LinkedTieredVec<usize> = LinkedTieredVec::with_minimum_capacity(4);
         assert_eq!(4, t.capacity());
         assert_eq!(2, t.tier_size());
 
-        t = TieredVec::with_minimum_capacity(8);
+        t = LinkedTieredVec::with_minimum_capacity(8);
         assert_eq!(16, t.capacity());
         assert_eq!(4, t.tier_size());
 
-        t = TieredVec::with_minimum_capacity(128);
+        t = LinkedTieredVec::with_minimum_capacity(128);
         assert_eq!(256, t.capacity());
         assert_eq!(16, t.tier_size());
     }
@@ -325,7 +325,7 @@ mod tests {
     #[test]
     fn insert() {
         let size = 4;
-        let mut t: TieredVec<usize> = TieredVec::new(size);
+        let mut t: LinkedTieredVec<usize> = LinkedTieredVec::new(size);
         assert_eq!(t.tier_size(), size);
 
         for i in 0..size {
@@ -347,7 +347,7 @@ mod tests {
     #[test]
     fn expand() {
         let size = 4;
-        let mut t: TieredVec<usize> = TieredVec::new(size);
+        let mut t: LinkedTieredVec<usize> = LinkedTieredVec::new(size);
 
         for i in 0..size * size {
             assert!(t.insert(i, i * 2).is_ok());
@@ -371,7 +371,7 @@ mod tests {
     #[test]
     fn remove_and_contract() {
         let size = 16;
-        let mut t: TieredVec<usize> = TieredVec::new(size);
+        let mut t: LinkedTieredVec<usize> = LinkedTieredVec::new(size);
         assert_eq!(t.capacity(), size * size);
 
         for i in 0..size * size / 8 {
