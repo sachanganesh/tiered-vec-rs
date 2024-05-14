@@ -277,14 +277,7 @@ where
             if masked_head == masked_rank {
                 self.push_front(elem)
             } else {
-                let head_delta = masked_rank.abs_diff(masked_head);
-                let tail_delta = masked_rank.abs_diff(masked_tail);
-
-                if head_delta <= tail_delta {
-                    self.shift_to_head(masked_rank);
-                } else {
-                    self.shift_to_tail(masked_rank);
-                }
+                self.shift_to_tail(masked_rank);
 
                 self.set_element(masked_rank, elem);
             }
