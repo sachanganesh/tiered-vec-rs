@@ -365,6 +365,31 @@ where
     }
 }
 
+impl<T> Clone for FlatTieredVec<T>
+where
+    T: Clone + Debug,
+{
+    fn clone(&self) -> Self {
+        let layout = Self::layout_for(self.tier_capacity())
+            .expect("memory layout for tier size should be valid");
+
+        let buffer_ptr = unsafe { alloc_zeroed(layout) };
+
+        let mut cloned = Self {
+            ptr: buffer_ptr,
+            tier_capacity: self.tier_capacity(),
+            len: 0,
+            marker: PhantomData,
+        };
+
+        for i in 0..self.len() {
+            cloned.push(self[i].clone());
+        }
+
+        return cloned;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
