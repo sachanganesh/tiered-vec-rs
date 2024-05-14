@@ -4,7 +4,6 @@ use std::{
     fmt::Debug,
     mem::{size_of, MaybeUninit},
     ops::{Index, IndexMut},
-    ptr,
 };
 
 #[repr(C)]
@@ -57,11 +56,6 @@ where
     #[inline]
     pub const fn is_full(&self) -> bool {
         self.len() == self.capacity()
-    }
-
-    #[inline]
-    pub const fn max_rank(&self) -> usize {
-        self.len() - 1
     }
 
     #[inline]
@@ -401,24 +395,6 @@ mod tests {
         assert!(tv.tier(0).contains_rank(2));
         assert!(!tv.tier(0).contains_rank(3));
     }
-
-    // #[test]
-    // fn insert_at_rank_shift_head() {
-    //     let mut tv: FlatTieredVec<usize> = prepare_tiered_vec(4);
-
-    //     // [0, 1, 2, n]
-    //     tv.tier_mut(0).push_back(0);
-    //     tv.tier_mut(0).push_back(1);
-    //     tv.tier_mut(0).push_back(2);
-
-    //     // [1, 3, 2, 0]
-    //     tv.tier_mut(0).insert(1, 3);
-    //     assert_eq!(*tv.tier(0).get(0).unwrap(), 1);
-    //     assert_eq!(*tv.tier(0).get(1).unwrap(), 3);
-    //     assert_eq!(*tv.tier(0).get(2).unwrap(), 2);
-    //     assert_eq!(*tv.tier(0).get(3).unwrap(), 0);
-    //     assert_eq!(tv.tier(0).masked_head(), 3);
-    // }
 
     #[test]
     fn insert_at_rank_shift_tail() {

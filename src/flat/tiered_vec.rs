@@ -2,12 +2,9 @@ use std::{
     alloc::{alloc_zeroed, realloc, Layout, LayoutError},
     fmt::Debug,
     marker::PhantomData,
-    mem::{size_of, MaybeUninit},
     ops::{Index, IndexMut},
-    ptr::{self, NonNull},
+    ptr,
 };
-
-use crate::error::{TierError, TieredVectorError};
 
 use super::tier::Tier;
 
@@ -163,6 +160,9 @@ where
         self.tier_mut(self.tier_index(index)).get_by_rank_mut(index)
     }
 
+    // todo: currently copying second tier's data twice
+    //          - copy first tier's data to new location
+    //          - copy second tier's data directly to final expected location
     fn expand(&mut self) {
         let curr_tier_capacity = self.tier_capacity();
         let new_tier_capacity = self.tier_capacity() << 1;
