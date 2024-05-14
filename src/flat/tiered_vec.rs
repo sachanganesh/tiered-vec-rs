@@ -85,7 +85,7 @@ where
 
     #[inline]
     const fn mask(&self, val: usize) -> usize {
-        val & (self.capacity() - 1)
+        val & (self.num_tiers() - 1)
     }
 
     #[inline]
@@ -105,7 +105,7 @@ where
 
     #[inline]
     const fn tier_index(&self, rank: usize) -> usize {
-        rank / self.tier_capacity()
+        rank >> self.num_tiers().ilog2()
     }
 
     fn raw_tier_ptr_from_capacity(&self, index: usize, tier_capacity: usize) -> *mut Tier<T> {
