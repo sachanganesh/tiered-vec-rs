@@ -260,18 +260,16 @@ where
     }
 
     pub fn remove(&mut self, index: usize) -> T {
-        let num_entries = self.len();
-        assert!(index < num_entries);
+        assert!(index < self.len());
 
         let tier_index = self.tier_index(index);
         let mut prev_popped = None;
 
         // shift phase
         let elem = self.tier_mut(tier_index).remove(index);
-        self.len -= 1;
 
         // pop-push phase
-        let last_tier_index = self.tier_index(num_entries);
+        let last_tier_index = self.tier_index(self.len() - 1);
         for i in (tier_index + 1..last_tier_index + 1).rev() {
             let tier = self.tier_mut(i);
 
@@ -288,6 +286,8 @@ where
         if let Some(popped) = prev_popped {
             self.tier_mut(tier_index).push_back(popped);
         }
+
+        self.len -= 1;
 
         return elem;
     }
