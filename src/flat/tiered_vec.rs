@@ -2,152 +2,14 @@ use std::{
     alloc::{alloc_zeroed, realloc, Layout, LayoutError},
     fmt::Debug,
     marker::PhantomData,
+    mem::{size_of, MaybeUninit},
     ops::{Index, IndexMut},
-    ptr,
+    ptr::{self, NonNull},
 };
 
+use crate::error::{TierError, TieredVectorError};
+
 use super::tier::Tier;
-
-pub trait TieredVec<T>
-where
-    T: Debug,
-{
-    fn tier_capacity(&self) -> usize;
-
-    fn len(&self) -> usize;
-    fn increment_len(&mut self);
-    fn decrement_len(&mut self);
-
-    fn tier(&self, index: usize) -> &Tier<T>;
-    fn tier_mut(&mut self, index: usize) -> &mut Tier<T>;
-
-    fn expand(&mut self);
-    fn contract(&mut self);
-
-    #[inline]
-    fn capacity(&self) -> usize {
-        self.tier_capacity().pow(2)
-    }
-
-    #[inline]
-    fn num_tiers(&self) -> usize {
-        self.tier_capacity()
-    }
-
-    #[inline]
-    fn tier_index(&self, rank: usize) -> usize {
-        rank >> self.num_tiers().ilog2()
-    }
-
-    #[inline]
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    #[inline]
-    fn is_full(&self) -> bool {
-        self.len() == self.capacity()
-    }
-
-    fn get(&self, index: usize) -> Option<&T> {
-        self.tier(self.tier_index(index)).get_by_rank(index)
-    }
-
-    fn get_mut(&mut self, index: usize) -> Option<&mut T> {
-        self.tier_mut(self.tier_index(index)).get_by_rank_mut(index)
-    }
-
-    fn insert(&mut self, index: usize, elem: T) {
-        assert!(index <= self.len());
-
-        if self.is_full() {
-            self.expand();
-        }
-
-        let tier_index = self.tier_index(index);
-        let mut prev_popped = None;
-
-        for i in tier_index..self.num_tiers() {
-            let tier = self.tier_mut(i);
-
-            if tier.is_full() {
-                let popped = tier.pop_back();
-
-                if let Some(prev_elem) = prev_popped {
-                    tier.push_front(prev_elem);
-                }
-
-                prev_popped = Some(popped);
-            } else {
-                if let Some(prev_elem) = prev_popped.take() {
-                    tier.push_front(prev_elem);
-                }
-
-                break;
-            }
-        }
-
-        self.tier_mut(tier_index).insert(index, elem);
-        self.increment_len();
-    }
-
-    fn remove(&mut self, index: usize) -> T {
-        let num_entries = self.len();
-        assert!(index < num_entries);
-
-        let tier_index = self.tier_index(index);
-        let mut prev_popped = None;
-
-        // shift phase
-        let elem = self.tier_mut(tier_index).remove(index);
-        self.decrement_len();
-
-        // pop-push phase
-        let last_tier_index = self.tier_index(num_entries);
-        for i in (tier_index + 1..last_tier_index + 1).rev() {
-            let tier = self.tier_mut(i);
-
-            if !tier.is_empty() {
-                let popped = tier.pop_front();
-                if let Some(prev_elem) = prev_popped {
-                    tier.push_back(prev_elem);
-                }
-
-                prev_popped = Some(popped);
-            }
-        }
-
-        if let Some(popped) = prev_popped {
-            self.tier_mut(tier_index).push_back(popped);
-        }
-
-        return elem;
-    }
-
-    fn push(&mut self, elem: T) {
-        if self.is_full() {
-            self.expand();
-        }
-
-        let tier = self.tier_mut(self.tier_index(self.len()));
-        assert!(!tier.is_full());
-
-        tier.push_back(elem);
-        self.increment_len();
-    }
-
-    fn pop(&mut self) -> T {
-        assert!(!self.is_empty());
-
-        let tier = self.tier_mut(self.tier_index(self.len() - 1));
-        assert!(!tier.is_empty());
-
-        let elem = tier.pop_back();
-
-        self.decrement_len();
-        return elem;
-    }
-}
 
 pub struct FlatTieredVec<T>
 where
@@ -200,7 +62,6 @@ where
         Self::new(tier_capacity)
     }
 
-    #[inline]
     fn layout_from(tier_layout: Layout, tier_capacity: usize) -> Result<Layout, LayoutError> {
         Layout::from_size_align(tier_layout.size() * tier_capacity, tier_layout.align())
     }
@@ -217,6 +78,36 @@ where
             .size()
     }
 
+    #[inline]
+    pub const fn capacity(&self) -> usize {
+        self.tier_capacity.pow(2)
+    }
+
+    #[inline]
+    const fn mask(&self, val: usize) -> usize {
+        val & (self.num_tiers() - 1)
+    }
+
+    #[inline]
+    const fn num_tiers(&self) -> usize {
+        self.tier_capacity
+    }
+
+    #[inline]
+    pub const fn tier_capacity(&self) -> usize {
+        self.tier_capacity
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline]
+    const fn tier_index(&self, rank: usize) -> usize {
+        rank >> self.num_tiers().ilog2()
+    }
+
     fn raw_tier_ptr_from_capacity(&self, index: usize, tier_capacity: usize) -> *mut Tier<T> {
         assert!(index < tier_capacity);
 
@@ -228,48 +119,48 @@ where
         }
     }
 
-    #[inline]
     fn raw_tier_ptr(&self, index: usize) -> *mut Tier<T> {
         self.raw_tier_ptr_from_capacity(index, self.tier_capacity())
     }
-}
 
-impl<T> TieredVec<T> for FlatTieredVec<T>
-where
-    T: Debug,
-{
-    #[inline]
-    fn tier_capacity(&self) -> usize {
-        self.tier_capacity
-    }
-
-    #[inline]
-    fn len(&self) -> usize {
-        self.len
-    }
-
-    #[inline]
-    fn increment_len(&mut self) {
-        self.len += 1;
-    }
-
-    #[inline]
-    fn decrement_len(&mut self) {
-        self.len -= 1;
-    }
-
-    fn tier(&self, index: usize) -> &Tier<T> {
+    pub(crate) fn tier(&self, index: usize) -> &Tier<T> {
         let tier = unsafe { &*self.raw_tier_ptr(index) };
         assert_eq!(self.tier_capacity(), tier.elements.len());
 
         return tier;
     }
 
-    fn tier_mut(&mut self, index: usize) -> &mut Tier<T> {
+    pub(crate) fn tier_mut(&mut self, index: usize) -> &mut Tier<T> {
         let tier = unsafe { &mut *self.raw_tier_ptr(index) };
         assert_eq!(self.tier_capacity(), tier.elements.len());
 
         return tier;
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Tier<T>> {
+        (0..self.num_tiers()).map(move |i| unsafe { &*self.raw_tier_ptr(i) })
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Tier<T>> {
+        (0..self.num_tiers()).map(move |i| unsafe { &mut *self.raw_tier_ptr(i) })
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    #[inline]
+    pub fn is_full(&self) -> bool {
+        self.len() == self.capacity()
+    }
+
+    pub fn get(&self, index: usize) -> Option<&T> {
+        self.tier(self.tier_index(index)).get_by_rank(index)
+    }
+
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+        self.tier_mut(self.tier_index(index)).get_by_rank_mut(index)
     }
 
     fn expand(&mut self) {
@@ -334,32 +225,122 @@ where
         }
     }
 
-    fn contract(&mut self) {
-        todo!()
-        //     // only contract well below capacity to cull repeated alloc/free of memory upon reinsertion/redeletion
-        //     if num_entries < self.capacity() / 8 {
-        //         let curr_tier_capacity = self.tier_capacity();
-        //         let new_tier_capacity = curr_tier_capacity >> 1;
+    pub fn insert(&mut self, index: usize, elem: T) {
+        assert!(index <= self.len());
 
-        //         let split_index = new_tier_capacity >> 1;
-        //         let _ = self.offsets.split_off(split_index);
+        if self.is_full() {
+            self.expand();
+        }
 
-        //         let end_index = new_tier_capacity;
-        //         for i in (0..end_index).step_by(2) {
-        //             let old_start_index = i * curr_tier_capacity;
-        //             let old_end_index = old_start_index + curr_tier_capacity;
-        //             let old_tier = &mut self.buffer[old_start_index..old_end_index];
-        //             let old_ring_offsets = &mut self.offsets[i];
+        let tier_index = self.tier_index(index);
+        let mut prev_popped = None;
 
-        //             let new_ring_offsets = ImplicitTier::split_half(old_tier, old_ring_offsets);
-        //             self.offsets.insert(i + 1, new_ring_offsets);
-        //         }
+        for i in tier_index..self.num_tiers() {
+            let tier = self.tier_mut(i);
 
-        //         let _ = self.buffer.split_off(split_index * curr_tier_capacity);
+            if tier.is_full() {
+                let popped = tier.pop_back();
 
-        //         assert_eq!(self.offsets.len(), new_tier_capacity);
-        //     }
+                if let Some(prev_elem) = prev_popped {
+                    tier.push_front(prev_elem);
+                }
+
+                prev_popped = Some(popped);
+            } else {
+                if let Some(prev_elem) = prev_popped.take() {
+                    tier.push_front(prev_elem);
+                }
+
+                break;
+            }
+        }
+
+        self.tier_mut(tier_index).insert(index, elem);
+        self.len += 1;
     }
+
+    pub fn remove(&mut self, index: usize) -> T {
+        let num_entries = self.len();
+        assert!(index < num_entries);
+
+        let tier_index = self.tier_index(index);
+        let mut prev_popped = None;
+
+        // shift phase
+        let elem = self.tier_mut(tier_index).remove(index);
+        self.len -= 1;
+
+        // pop-push phase
+        let last_tier_index = self.tier_index(num_entries);
+        for i in (tier_index + 1..last_tier_index + 1).rev() {
+            let tier = self.tier_mut(i);
+
+            if !tier.is_empty() {
+                let popped = tier.pop_front();
+                if let Some(prev_elem) = prev_popped {
+                    tier.push_back(prev_elem);
+                }
+
+                prev_popped = Some(popped);
+            }
+        }
+
+        if let Some(popped) = prev_popped {
+            self.tier_mut(tier_index).push_back(popped);
+        }
+
+        return elem;
+    }
+
+    pub fn push(&mut self, elem: T) {
+        if self.is_full() {
+            self.expand();
+        }
+
+        let tier = self.tier_mut(self.tier_index(self.len()));
+        assert!(!tier.is_full());
+
+        tier.push_back(elem);
+        self.len += 1;
+    }
+
+    pub fn pop(&mut self) -> T {
+        assert!(!self.is_empty());
+
+        let tier = self.tier_mut(self.tier_index(self.len() - 1));
+        assert!(!tier.is_empty());
+
+        let elem = tier.pop_back();
+
+        self.len -= 1;
+        return elem;
+    }
+
+    // fn try_contract(&mut self, num_entries: usize) {
+    //     // only contract well below capacity to cull repeated alloc/free of memory upon reinsertion/redeletion
+    //     if num_entries < self.capacity() / 8 {
+    //         let curr_tier_capacity = self.tier_capacity();
+    //         let new_tier_capacity = curr_tier_capacity >> 1;
+
+    //         let split_index = new_tier_capacity >> 1;
+    //         let _ = self.offsets.split_off(split_index);
+
+    //         let end_index = new_tier_capacity;
+    //         for i in (0..end_index).step_by(2) {
+    //             let old_start_index = i * curr_tier_capacity;
+    //             let old_end_index = old_start_index + curr_tier_capacity;
+    //             let old_tier = &mut self.buffer[old_start_index..old_end_index];
+    //             let old_ring_offsets = &mut self.offsets[i];
+
+    //             let new_ring_offsets = ImplicitTier::split_half(old_tier, old_ring_offsets);
+    //             self.offsets.insert(i + 1, new_ring_offsets);
+    //         }
+
+    //         let _ = self.buffer.split_off(split_index * curr_tier_capacity);
+
+    //         assert_eq!(self.offsets.len(), new_tier_capacity);
+    //     }
+    // }
 }
 
 impl<T> Index<usize> for FlatTieredVec<T>

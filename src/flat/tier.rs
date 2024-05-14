@@ -370,7 +370,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::flat::tiered_vec::{FlatTieredVec, TieredVec};
+    use crate::flat::tiered_vec::FlatTieredVec;
     use std::fmt::Debug;
 
     fn prepare_tiered_vec<T>(tier_capacity: usize) -> FlatTieredVec<T>
