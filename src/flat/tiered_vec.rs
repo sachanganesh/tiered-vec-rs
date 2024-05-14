@@ -264,24 +264,56 @@ where
         assert!(index < num_entries);
 
         let tier_index = self.tier_index(index);
-        let last_tier_index = self.tier_index(num_entries - 1);
-
         let mut prev_popped = None;
 
-        for i in ((tier_index + 1)..last_tier_index + 1).rev() {
+        // shift phase
+        let elem = self.tier_mut(tier_index).remove(index);
+        self.len -= 1;
+
+        // pop-push phase
+        let last_tier_index = self.tier_index(num_entries);
+        for i in (tier_index + 1..last_tier_index + 1).rev() {
             let tier = self.tier_mut(i);
 
             if !tier.is_empty() {
+                let popped = tier.pop_front();
                 if let Some(prev_elem) = prev_popped {
                     tier.push_back(prev_elem);
-                    prev_popped = Some(tier.pop_front());
-                } else {
-                    prev_popped = Some(tier.pop_front());
                 }
+
+                prev_popped = Some(popped);
             }
         }
 
-        self.tier_mut(tier_index).remove(index)
+        if let Some(popped) = prev_popped {
+            self.tier_mut(tier_index).push_back(popped);
+        }
+
+        return elem;
+    }
+
+    pub fn push(&mut self, elem: T) {
+        if self.is_full() {
+            self.expand();
+        }
+
+        let tier = self.tier_mut(self.tier_index(self.len()));
+        assert!(!tier.is_full());
+
+        tier.push_back(elem);
+        self.len += 1;
+    }
+
+    pub fn pop(&mut self) -> T {
+        assert!(!self.is_empty());
+
+        let tier = self.tier_mut(self.tier_index(self.len() - 1));
+        assert!(!tier.is_empty());
+
+        let elem = tier.pop_back();
+
+        self.len -= 1;
+        return elem;
     }
 
     // fn try_contract(&mut self, num_entries: usize) {
