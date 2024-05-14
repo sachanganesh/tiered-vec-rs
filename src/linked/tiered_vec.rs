@@ -1,36 +1,29 @@
-use std::fmt::{Debug, Write};
+use std::ops::{Index, IndexMut};
 
-use super::error::{TierError, TieredVectorError};
 use super::tier::Tier;
 
 #[derive(Clone)]
-pub struct LinkedTieredVec<T>
-where
-    T: Clone + Debug,
-{
-    pub(crate) tiers: Vec<Tier<T>>,
+pub struct LinkedTieredVec<T> {
+    tiers: Vec<Tier<T>>,
+    len: usize,
 }
 
-impl<T> LinkedTieredVec<T>
-where
-    T: Clone + Debug,
-{
-    pub fn new(initial_tier_size: usize) -> Self {
-        assert!(initial_tier_size.is_power_of_two());
-        assert!(initial_tier_size.ge(&2));
+impl<T> LinkedTieredVec<T> {
+    pub fn new(tier_capacity: usize) -> Self {
+        assert!(tier_capacity.is_power_of_two());
+        assert!(tier_capacity.ge(&2));
 
-        let mut tiers = Vec::with_capacity(initial_tier_size);
-        for _ in 0..initial_tier_size {
-            tiers.push(Tier::new(initial_tier_size));
+        let mut tiers = Vec::with_capacity(tier_capacity);
+        for _ in 0..tier_capacity {
+            tiers.push(Tier::new(tier_capacity));
         }
 
-        Self { tiers }
+        Self { tiers, len: 0 }
     }
 
-    pub fn with_minimum_capacity(min_capacity: usize) -> Self {
-        assert!(min_capacity.ge(&4));
+    pub fn with_capacity(mut capacity: usize) -> Self {
+        assert!(capacity.ge(&4));
 
-        let mut capacity = min_capacity;
         if !capacity.is_power_of_two() {
             capacity = capacity.next_power_of_two();
         }
@@ -49,68 +42,60 @@ where
             tiers.push(Tier::new(tier_size));
         }
 
-        Self { tiers }
+        Self { tiers, len: 0 }
     }
 
-    #[inline(always)]
-    pub fn tier_size(&self) -> usize {
+    #[inline]
+    pub fn tier_capacity(&self) -> usize {
         self.tiers.len()
     }
 
-    pub(crate) fn tier_idx(&self, idx: usize) -> usize {
-        idx / self.tier_size()
+    #[inline]
+    fn num_tiers(&self) -> usize {
+        self.tier_capacity()
     }
 
+    #[inline]
     pub fn capacity(&self) -> usize {
-        self.tier_size() * self.tiers.len()
+        self.tier_capacity().pow(2)
     }
 
     pub fn len(&self) -> usize {
-        let mut l = 0;
-        for t in &self.tiers {
-            let curr_len = t.len();
-
-            if curr_len == 0 {
-                return l;
-            }
-
-            l += curr_len;
-        }
-
-        return l;
+        self.len
     }
 
+    #[inline]
+    fn tier_index(&self, rank: usize) -> usize {
+        rank >> self.num_tiers().ilog2()
+    }
+
+    #[inline]
     pub fn is_empty(&self) -> bool {
-        self.tiers
-            .get(0)
-            .expect("first tier is not initialized")
-            .is_empty()
+        self.len() == 0
     }
 
+    #[inline]
     pub fn is_full(&self) -> bool {
-        self.tiers[self.tiers.len() - 1].is_full()
+        self.len() == self.capacity()
     }
 
-    pub fn get_by_rank(&self, rank: usize) -> Option<&T> {
-        self.tiers.get(self.tier_idx(rank))?.get_by_rank(rank)
+    pub fn get(&self, rank: usize) -> Option<&T> {
+        self.tiers.get(self.tier_index(rank))?.get_by_rank(rank)
     }
 
-    pub fn get_mut_by_rank(&mut self, rank: usize) -> Option<&mut T> {
-        let tier_idx = self.tier_idx(rank);
+    pub fn get_mut(&mut self, rank: usize) -> Option<&mut T> {
+        let tier_idx = self.tier_index(rank);
 
-        self.tiers.get_mut(tier_idx)?.get_mut_by_rank(rank)
+        self.tiers.get_mut(tier_idx)?.get_by_rank_mut(rank)
     }
 
     fn expand(&mut self) {
-        let curr_tier_size = self.tier_size();
-        let new_tier_size = self.tier_size() << 1;
+        let curr_tier_size = self.tier_capacity();
+        let new_tier_size = self.tier_capacity() << 1;
 
         for i in 0..(curr_tier_size / 2) {
             let second_tier = self.tiers.remove(i + 1);
-            let first_tier = self
-                .tiers
-                .get_mut(i)
-                .expect("tier does not exist at old index");
+            let first_tier = &mut self.tiers[i];
 
             first_tier.merge(second_tier);
         }
@@ -123,7 +108,7 @@ where
     fn try_contract(&mut self, num_entries: usize) {
         // only contract well below capacity to cull repeated alloc/free of memory upon reinsertion/redeletion
         if num_entries < self.capacity() / 8 {
-            let new_tier_size = self.tier_size() >> 1;
+            let new_tier_size = self.tier_capacity() >> 1;
             let _ = self.tiers.split_off(new_tier_size >> 1);
 
             let end_idx = new_tier_size;
@@ -139,144 +124,117 @@ where
         }
     }
 
-    pub fn insert(&mut self, rank: usize, elem: T) -> Result<usize, TieredVectorError<T>> {
-        // @todo: why loop through every tier for every insert? find a different way to return this error
-        let num_entries = self.len();
-        if rank > num_entries {
-            return Err(TieredVectorError::TieredVectorOutofBoundsInsertionError(
-                rank, elem,
-            ));
-        }
+    pub fn insert(&mut self, index: usize, elem: T) {
+        assert!(index <= self.len());
 
-        if num_entries == self.capacity() {
+        if self.is_full() {
             self.expand();
         }
 
-        let mut tier_idx = self.tier_idx(rank);
+        // pop-push phase
+        let tier_index = self.tier_index(index);
         let mut prev_popped = None;
 
-        // pop-push phase
-        if self
-            .tiers
-            .get(tier_idx)
-            .expect("tier at index does not exist")
-            .is_full()
-        {
-            for i in tier_idx..self.tiers.len() {
-                let tier = self.tiers.get_mut(i).expect("tier at index does not exist");
+        for i in tier_index..self.num_tiers() {
+            let tier = &mut self.tiers[i];
 
-                if tier.is_full() {
-                    if let Ok(popped) = tier.pop_front() {
-                        if let Some(prev_elem) = prev_popped {
-                            tier.push_back(prev_elem).expect(
-                                "tier did not have space despite prior call to `pop_front`",
-                            );
-                        }
+            if tier.is_full() {
+                let popped = tier.pop_back();
 
-                        prev_popped = Some(popped);
-                    }
-                } else {
-                    if let Some(prev_elem) = prev_popped.take() {
-                        tier.push_back(prev_elem)
-                            .expect("tier did not have space despite prior call to `pop_front`");
-                    }
+                if let Some(prev_elem) = prev_popped {
+                    tier.push_front(prev_elem);
                 }
+
+                prev_popped = Some(popped);
+            } else {
+                if let Some(prev_elem) = prev_popped.take() {
+                    tier.push_front(prev_elem);
+                }
+
+                break;
             }
         }
 
         // shift phase
-        tier_idx = self.tier_idx(rank);
-        let tier = self
-            .tiers
-            .get_mut(tier_idx)
-            .expect("tier at index does not exist");
-        tier.insert(rank, elem)
-            .expect("could not insert into tier at rank");
-
-        Ok(rank)
+        self.tiers[tier_index].insert(index, elem);
+        self.len += 1;
     }
 
-    pub fn remove(&mut self, rank: usize) -> Result<T, TieredVectorError<T>> {
-        let num_entries = self.len();
-        if rank > num_entries {
-            return Err(TieredVectorError::TieredVectorRankOutOfBoundsError(rank));
-        }
+    pub fn remove(&mut self, index: usize) -> T {
+        assert!(index < self.len());
 
-        self.try_contract(num_entries);
-
-        let tier_idx = self.tier_idx(rank);
+        let tier_index = self.tier_index(index);
         let mut prev_popped = None;
 
         // shift phase
-        let target_tier = self
-            .tiers
-            .get_mut(tier_idx)
-            .expect("tier at index does not exist");
+        let elem = self.tiers[tier_index].remove(index);
 
-        match target_tier.remove(rank) {
-            Err(TierError::TierEmptyError) => Err(TieredVectorError::TieredVectorEmptyError),
-            Err(TierError::TierRankOutOfBoundsError(r)) => {
-                Err(TieredVectorError::TieredVectorRankOutOfBoundsError(r))
-            }
-            Err(_) => unreachable!(),
+        // pop-push phase
+        let last_tier_index = self.tier_index(self.len() - 1);
+        for i in (tier_index + 1..last_tier_index + 1).rev() {
+            let tier = &mut self.tiers[i];
 
-            Ok(removed) => {
-                let last_tier_idx = self.tier_idx(num_entries);
-
-                // pop-push phase
-                for i in (tier_idx + 1..last_tier_idx + 1).rev() {
-                    let tier = self.tiers.get_mut(i).expect("tier at index does not exist");
-
-                    if let Ok(popped) = tier.pop_front() {
-                        if let Some(prev_elem) = prev_popped {
-                            tier.push_back(prev_elem).expect(
-                                "tier did not have space despite prior call to `pop_front`",
-                            );
-                        }
-
-                        prev_popped = Some(popped);
-                    }
+            if !tier.is_empty() {
+                let popped = tier.pop_front();
+                if let Some(prev_elem) = prev_popped {
+                    tier.push_back(prev_elem);
                 }
 
-                if let Some(popped) = prev_popped {
-                    self.tiers[tier_idx]
-                        .push_back(popped)
-                        .expect("tier did not have space despite prior removal");
-                }
-
-                Ok(removed)
+                prev_popped = Some(popped);
             }
         }
+
+        if let Some(popped) = prev_popped {
+            self.tiers[tier_index].push_back(popped);
+        }
+
+        self.len -= 1;
+
+        return elem;
+    }
+
+    pub fn push(&mut self, elem: T) {
+        if self.is_full() {
+            self.expand();
+        }
+
+        let index = self.tier_index(self.len());
+        let tier = &mut self.tiers[index];
+        assert!(!tier.is_full());
+
+        tier.push_back(elem);
+        self.len += 1;
+    }
+
+    pub fn pop(&mut self) -> T {
+        assert!(!self.is_empty());
+
+        let index = self.tier_index(self.len() - 1);
+        let tier = &mut self.tiers[index];
+        assert!(!tier.is_empty());
+
+        let elem = tier.pop_back();
+
+        self.len -= 1;
+        return elem;
     }
 }
 
-impl<T: Clone + Debug> Debug for LinkedTieredVec<T> {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_char('[')?;
+impl<T> Index<usize> for LinkedTieredVec<T> {
+    type Output = T;
 
-        for i in 0..self.tiers.len() {
-            let tier = &self.tiers[i];
+    fn index(&self, index: usize) -> &Self::Output {
+        assert!(index < self.len());
+        &self.tiers[self.tier_index(index)][index]
+    }
+}
 
-            for j in 0..tier.buffer.len() {
-                if let Some(elem) = tier.get(j) {
-                    formatter.write_str(format!("{:?}", elem).as_str())?;
-                } else {
-                    formatter.write_str("_")?;
-                }
+impl<T> IndexMut<usize> for LinkedTieredVec<T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        assert!(index < self.len());
 
-                if j != tier.buffer.len() - 1 {
-                    formatter.write_str(", ")?;
-                }
-            }
-
-            if i != self.tiers.len() - 1 {
-                formatter.write_str(", ")?;
-            }
-        }
-
-        formatter.write_char(']')?;
-
-        Ok(())
+        let tier_index = self.tier_index(index);
+        &mut self.tiers[tier_index][index]
     }
 }
 
@@ -302,39 +260,39 @@ mod tests {
         let t: LinkedTieredVec<usize> = LinkedTieredVec::new(size);
         assert_eq!(t.len(), 0);
         assert_eq!(t.capacity(), size * size);
-        assert_eq!(t.tier_size(), size);
+        assert_eq!(t.tier_capacity(), size);
         assert!(t.is_empty());
         assert!(!t.is_full());
     }
 
     #[test]
     fn with_minimum_capacity() {
-        let mut t: LinkedTieredVec<usize> = LinkedTieredVec::with_minimum_capacity(4);
+        let mut t: LinkedTieredVec<usize> = LinkedTieredVec::with_capacity(4);
         assert_eq!(4, t.capacity());
-        assert_eq!(2, t.tier_size());
+        assert_eq!(2, t.tier_capacity());
 
-        t = LinkedTieredVec::with_minimum_capacity(8);
+        t = LinkedTieredVec::with_capacity(8);
         assert_eq!(16, t.capacity());
-        assert_eq!(4, t.tier_size());
+        assert_eq!(4, t.tier_capacity());
 
-        t = LinkedTieredVec::with_minimum_capacity(128);
+        t = LinkedTieredVec::with_capacity(128);
         assert_eq!(256, t.capacity());
-        assert_eq!(16, t.tier_size());
+        assert_eq!(16, t.tier_capacity());
     }
 
     #[test]
     fn insert() {
         let size = 4;
         let mut t: LinkedTieredVec<usize> = LinkedTieredVec::new(size);
-        assert_eq!(t.tier_size(), size);
+        assert_eq!(t.tier_capacity(), size);
 
         for i in 0..size {
-            assert!(t.insert(i, i * 2).is_ok());
+            t.insert(i, i * 2);
             assert_eq!(t.len(), i + 1);
         }
 
         for i in 0..size {
-            let result = t.get_by_rank(i);
+            let result = t.get(i);
             assert!(result.is_some());
             assert_eq!(*result.unwrap(), i * 2);
         }
@@ -350,49 +308,47 @@ mod tests {
         let mut t: LinkedTieredVec<usize> = LinkedTieredVec::new(size);
 
         for i in 0..size * size {
-            assert!(t.insert(i, i * 2).is_ok());
+            t.insert(i, i);
+            assert_eq!(t[i], i);
         }
-        assert_eq!(t.tier_size(), size);
+        assert_eq!(t.tier_capacity(), size);
         assert_eq!(t.len(), size * size);
         assert!(t.is_full());
 
-        assert!(t.insert(size * size, (size * size) * 2).is_ok());
-        assert_eq!(t.tier_size(), size * 2);
+        t.insert(size * size, size * size);
+        assert_eq!(t.tier_capacity(), size * 2);
         assert_eq!(t.len(), (size * size) + 1);
         assert!(!t.is_full());
 
         for i in 0..((size * size) + 1) {
-            let result = t.get_by_rank(i);
+            let result = t.get(i);
             assert!(result.is_some());
-            assert_eq!(*result.unwrap(), i * 2);
+            assert_eq!(*result.unwrap(), i);
         }
     }
 
     #[test]
-    fn remove_and_contract() {
+    fn remove() {
         let size = 16;
         let mut t: LinkedTieredVec<usize> = LinkedTieredVec::new(size);
         assert_eq!(t.capacity(), size * size);
 
         for i in 0..size * size / 8 {
-            assert!(t.insert(i, i).is_ok());
+            t.insert(i, i);
+            assert_eq!(t[i], i);
         }
-        assert_eq!(t.tier_size(), size);
+        assert_eq!(t.tier_capacity(), size);
         assert_eq!(t.len(), size * size / 8);
         assert_eq!(t.capacity(), size * size);
 
-        assert!(t.remove(0).is_ok());
+        t.remove(0);
 
-        assert_eq!(*t.get_by_rank(0).unwrap(), 1);
+        assert_eq!(*t.get(0).unwrap(), 1);
         assert_eq!(t.len(), (size * size / 8) - 1);
-        assert_eq!(t.capacity(), size * size);
 
-        // contract
-        assert!(t.remove(0).is_ok());
-
-        assert_eq!(*t.get_by_rank(0).unwrap(), 2);
+        t.remove(0);
+        assert_eq!(*t.get(0).unwrap(), 2);
         assert_eq!(t.len(), (size * size / 8) - 2);
-        assert_eq!(t.capacity(), size * size / 4);
     }
 
     #[test]
