@@ -192,6 +192,26 @@ impl<T> Tier<T> {
         self.take_element(index)
     }
 
+    pub fn pop_push_front(&mut self, elem: T) -> T {
+        assert!(self.is_full());
+
+        self.head_backward();
+        self.tail_backward();
+        let index = self.masked_head();
+
+        self.replace_element(index, elem)
+    }
+
+    pub fn pop_push_back(&mut self, elem: T) -> T {
+        assert!(self.is_full());
+
+        let index = self.masked_tail();
+        self.head_forward();
+        self.tail_forward();
+
+        self.replace_element(index, elem)
+    }
+
     fn shift_to_head(&mut self, from: usize) {
         let mut cursor: Option<T> = None;
         let mut i = from;

@@ -65,8 +65,13 @@ impl<T> LinkedTieredVec<T> {
     }
 
     #[inline]
+    fn mask(&self, val: usize) -> usize {
+        val & (self.tier_capacity() - 1)
+    }
+
+    #[inline]
     fn tier_index(&self, rank: usize) -> usize {
-        rank >> self.num_tiers().ilog2()
+        rank >> self.tier_capacity().ilog2()
     }
 
     #[inline]
@@ -131,32 +136,38 @@ impl<T> LinkedTieredVec<T> {
             self.expand();
         }
 
-        // pop-push phase
         let tier_index = self.tier_index(index);
-        let mut prev_popped = None;
 
-        for i in tier_index..self.num_tiers() {
-            let tier = &mut self.tiers[i];
+        if !self.tiers[tier_index].is_full() {
+            self.tiers[tier_index].insert(index, elem);
+            self.len += 1;
 
-            if tier.is_full() {
-                let popped = tier.pop_back();
-
-                if let Some(prev_elem) = prev_popped {
-                    tier.push_front(prev_elem);
-                }
-
-                prev_popped = Some(popped);
-            } else {
-                if let Some(prev_elem) = prev_popped.take() {
-                    tier.push_front(prev_elem);
-                }
-
-                break;
-            }
+            return;
         }
 
-        // shift phase
-        self.tiers[tier_index].insert(index, elem);
+        let last_tier_index = self.tier_index(self.len() - 1);
+
+        let mut tier = &mut self.tiers[tier_index];
+        let mut prev_popped = Some(tier.pop_back());
+        tier.insert(index, elem);
+
+        for i in tier_index + 1..last_tier_index {
+            tier = &mut self.tiers[i];
+
+            let prev_elem = prev_popped.take().expect("loop should always pop a value");
+            prev_popped = Some(tier.pop_push_front(prev_elem));
+        }
+
+        tier = &mut self.tiers[last_tier_index];
+
+        if tier.is_full() {
+            let prev_elem = prev_popped.take().expect("loop should always pop a value");
+            prev_popped = Some(tier.pop_push_front(prev_elem));
+
+            tier = &mut self.tiers[last_tier_index + 1];
+        }
+
+        tier.push_front(prev_popped.take().expect("loop should always pop a value"));
         self.len += 1;
     }
 
@@ -164,32 +175,27 @@ impl<T> LinkedTieredVec<T> {
         assert!(index < self.len());
 
         let tier_index = self.tier_index(index);
-        let mut prev_popped = None;
 
-        // shift phase
-        let elem = self.tiers[tier_index].remove(index);
+        if !self.tiers[tier_index].is_full() {
+            self.len -= 1;
+            return self.tiers[tier_index].remove(index);
+        }
 
-        // pop-push phase
         let last_tier_index = self.tier_index(self.len() - 1);
-        for i in (tier_index + 1..last_tier_index + 1).rev() {
+        let mut prev_popped = Some(self.tiers[last_tier_index].pop_front());
+
+        for i in (tier_index + 1..last_tier_index).rev() {
             let tier = &mut self.tiers[i];
 
-            if !tier.is_empty() {
-                let popped = tier.pop_front();
-                if let Some(prev_elem) = prev_popped {
-                    tier.push_back(prev_elem);
-                }
-
-                prev_popped = Some(popped);
-            }
+            let prev_elem = prev_popped.take().expect("loop should always pop a value");
+            prev_popped = Some(tier.pop_push_back(prev_elem));
         }
 
-        if let Some(popped) = prev_popped {
-            self.tiers[tier_index].push_back(popped);
-        }
+        let tier = &mut self.tiers[tier_index];
+        let elem = tier.remove(index);
+        tier.push_back(prev_popped.take().expect("loop should always pop a value"));
 
         self.len -= 1;
-
         return elem;
     }
 
