@@ -3,6 +3,9 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::rngs::SmallRng;
 use rand::SeedableRng;
 
+// fixed size 1000, 10_000, 1 mil, 10 mil, 100 mil
+//
+
 mod linked_tiered_vec {
     use rand::{
         distributions::{Distribution, WeightedIndex},
@@ -25,6 +28,12 @@ mod linked_tiered_vec {
         }
     }
 
+    pub fn insert_at(index: usize, tiered_vec: &mut LinkedTieredVec<usize>, num_insertions: usize) {
+        for _ in 0..num_insertions {
+            tiered_vec.insert(index, index);
+        }
+    }
+
     pub fn update(mut rng: SmallRng, tiered_vec: &mut LinkedTieredVec<usize>, num_updates: usize) {
         for i in 0..num_updates {
             *tiered_vec
@@ -42,6 +51,12 @@ mod linked_tiered_vec {
             tiered_vec.remove(gen);
 
             len -= 1;
+        }
+    }
+
+    pub fn delete_at(index: usize, tiered_vec: &mut LinkedTieredVec<usize>, num_insertions: usize) {
+        for _ in 0..num_insertions {
+            tiered_vec.remove(index);
         }
     }
 
@@ -107,6 +122,12 @@ mod flat_tiered_vec {
         }
     }
 
+    pub fn insert_at(index: usize, tiered_vec: &mut FlatTieredVec<usize>, num_insertions: usize) {
+        for _ in 0..num_insertions {
+            tiered_vec.insert(index, index);
+        }
+    }
+
     pub fn update(mut rng: SmallRng, tiered_vec: &mut FlatTieredVec<usize>, num_updates: usize) {
         let len = tiered_vec.len();
 
@@ -124,6 +145,12 @@ mod flat_tiered_vec {
             tiered_vec.remove(gen);
 
             len -= 1;
+        }
+    }
+
+    pub fn delete_at(index: usize, tiered_vec: &mut FlatTieredVec<usize>, num_insertions: usize) {
+        for _ in 0..num_insertions {
+            tiered_vec.remove(index);
         }
     }
 
@@ -188,6 +215,12 @@ mod vec {
         }
     }
 
+    pub fn insert_at(index: usize, vec: &mut Vec<usize>, num_insertions: usize) {
+        for _ in 0..num_insertions {
+            vec.insert(index, index)
+        }
+    }
+
     pub fn update(mut rng: SmallRng, vec: &mut Vec<usize>, num_updates: usize) {
         let len = vec.len();
 
@@ -202,6 +235,12 @@ mod vec {
         for _ in 0..num_deletes {
             vec.remove(rng.gen_range(0..len));
             len -= 1;
+        }
+    }
+
+    pub fn delete_at(index: usize, vec: &mut Vec<usize>, num_insertions: usize) {
+        for _ in 0..num_insertions {
+            vec.remove(index);
         }
     }
 
@@ -241,44 +280,142 @@ mod vec {
     }
 }
 
-fn bench_insert(c: &mut Criterion) {
-    let mut group = c.benchmark_group("Insertion");
+fn bench_insert_worst(c: &mut Criterion) {
+    let starting_size = 1_000;
+    let vec_sizes = [1_000, 10_000, 100_000];
 
-    let vec_size: usize = 1_000;
-    let mut tv = LinkedTieredVec::with_capacity(vec_size);
-    let mut ftv = FlatTieredVec::new(tv.tier_capacity());
-    let mut v: Vec<_> = Vec::with_capacity(tv.capacity());
+    for vec_size in vec_sizes {
+        let mut group = c.benchmark_group(format!("Insertion Worst Case {}", vec_size));
 
-    group.bench_function("Vec", |b| {
-        b.iter(|| {
-            let rng = SmallRng::seed_from_u64(256);
-            vec::insert(black_box(rng), black_box(&mut v), vec_size);
-        })
-    });
+        let mut tv = LinkedTieredVec::with_capacity(vec_size);
+        let mut ftv: FlatTieredVec<usize> = FlatTieredVec::new(tv.tier_capacity());
+        let mut v: Vec<usize> = Vec::with_capacity(tv.capacity());
 
-    group.bench_function("LinkedTieredVec", |b| {
-        b.iter(|| {
-            let rng = SmallRng::seed_from_u64(256);
-            linked_tiered_vec::insert(black_box(rng), black_box(&mut tv), vec_size);
-        })
-    });
+        for i in 0..starting_size {
+            tv.insert(i, i);
+            ftv.insert(i, i);
+            v.insert(i, i);
+        }
 
-    group.bench_function("FlatTieredVec", |b| {
-        b.iter(|| {
-            let rng = SmallRng::seed_from_u64(256);
-            flat_tiered_vec::insert(black_box(rng), black_box(&mut ftv), vec_size);
-        })
-    });
+        group.bench_function("Vec", |b| {
+            b.iter(|| {
+                let rng = SmallRng::seed_from_u64(256);
+                vec::insert_at(0, black_box(&mut v), vec_size);
+            })
+        });
 
-    // It's recommended to call group.finish() explicitly at the end, but if you don't it will
-    // be called automatically when the group is dropped.
-    group.finish();
+        group.bench_function("LinkedTieredVec", |b| {
+            b.iter(|| {
+                let rng = SmallRng::seed_from_u64(256);
+                linked_tiered_vec::insert_at(0, black_box(&mut tv), vec_size);
+            })
+        });
+
+        group.bench_function("FlatTieredVec", |b| {
+            b.iter(|| {
+                let rng = SmallRng::seed_from_u64(256);
+                flat_tiered_vec::insert_at(0, black_box(&mut ftv), vec_size);
+            })
+        });
+
+        // It's recommended to call group.finish() explicitly at the end, but if you don't it will
+        // be called automatically when the group is dropped.
+        group.finish();
+    }
+}
+
+fn bench_insert_best(c: &mut Criterion) {
+    let starting_size = 1_000;
+    let vec_sizes = [1_000, 10_000, 100_000];
+
+    for vec_size in vec_sizes {
+        let mut group = c.benchmark_group(format!("Insertion Best Case {}", vec_size));
+
+        let mut tv = LinkedTieredVec::with_capacity(vec_size);
+        let mut ftv: FlatTieredVec<usize> = FlatTieredVec::new(tv.tier_capacity());
+        let mut v: Vec<usize> = Vec::with_capacity(tv.capacity());
+
+        for i in 0..starting_size {
+            tv.insert(i, i);
+            ftv.insert(i, i);
+            v.insert(i, i);
+        }
+
+        group.bench_function("Vec", |b| {
+            b.iter(|| {
+                let rng = SmallRng::seed_from_u64(256);
+                vec::insert_at(v.len(), black_box(&mut v), vec_size);
+            })
+        });
+
+        group.bench_function("LinkedTieredVec", |b| {
+            b.iter(|| {
+                let rng = SmallRng::seed_from_u64(256);
+                linked_tiered_vec::insert_at(tv.len(), black_box(&mut tv), vec_size);
+            })
+        });
+
+        group.bench_function("FlatTieredVec", |b| {
+            b.iter(|| {
+                let rng = SmallRng::seed_from_u64(256);
+                flat_tiered_vec::insert_at(ftv.len(), black_box(&mut ftv), vec_size);
+            })
+        });
+
+        // It's recommended to call group.finish() explicitly at the end, but if you don't it will
+        // be called automatically when the group is dropped.
+        group.finish();
+    }
+}
+
+fn bench_insert_random(c: &mut Criterion) {
+    let starting_size = 1_000;
+    let vec_sizes = [1_000, 10_000, 100_000];
+
+    for vec_size in vec_sizes {
+        let mut group = c.benchmark_group(format!("Insertion Random {}", vec_size));
+
+        let mut tv = LinkedTieredVec::with_capacity(vec_size);
+        let mut ftv: FlatTieredVec<usize> = FlatTieredVec::new(tv.tier_capacity());
+        let mut v: Vec<usize> = Vec::with_capacity(tv.capacity());
+
+        for i in 0..starting_size {
+            tv.insert(i, i);
+            ftv.insert(i, i);
+            v.insert(i, i);
+        }
+
+        group.bench_function("Vec", |b| {
+            b.iter(|| {
+                let rng = SmallRng::seed_from_u64(256);
+                vec::insert(black_box(rng), black_box(&mut v), vec_size);
+            })
+        });
+
+        group.bench_function("LinkedTieredVec", |b| {
+            b.iter(|| {
+                let rng = SmallRng::seed_from_u64(256);
+                linked_tiered_vec::insert(black_box(rng), black_box(&mut tv), vec_size);
+            })
+        });
+
+        group.bench_function("FlatTieredVec", |b| {
+            b.iter(|| {
+                let rng = SmallRng::seed_from_u64(256);
+                flat_tiered_vec::insert(black_box(rng), black_box(&mut ftv), vec_size);
+            })
+        });
+
+        // It's recommended to call group.finish() explicitly at the end, but if you don't it will
+        // be called automatically when the group is dropped.
+        group.finish();
+    }
 }
 
 fn bench_update(c: &mut Criterion) {
     let mut group = c.benchmark_group("Update");
 
-    let vec_size: usize = 100_000;
+    let vec_size: usize = 1_000;
     let mut tv = LinkedTieredVec::with_capacity(vec_size);
     let mut ftv = FlatTieredVec::new(tv.tier_capacity());
     let mut v: Vec<_> = Vec::with_capacity(tv.capacity());
@@ -339,7 +476,7 @@ fn bench_update(c: &mut Criterion) {
 fn bench_delete(c: &mut Criterion) {
     let mut group = c.benchmark_group("Delete");
 
-    let vec_size: usize = 10_000;
+    let vec_size: usize = 1_000;
     let mut tv = LinkedTieredVec::with_capacity(vec_size);
     let mut ftv = FlatTieredVec::new(tv.tier_capacity());
     let mut v: Vec<_> = Vec::with_capacity(tv.capacity());
@@ -404,7 +541,7 @@ fn bench_delete(c: &mut Criterion) {
 fn bench_random_mix(c: &mut Criterion) {
     let mut group = c.benchmark_group("Random Mix");
 
-    let vec_size: usize = 50;
+    let vec_size: usize = 1_000;
     let tv: LinkedTieredVec<usize> = LinkedTieredVec::with_capacity(vec_size);
     let ftv: FlatTieredVec<usize> = FlatTieredVec::new(tv.tier_capacity());
     let mut v: Vec<usize> = Vec::with_capacity(tv.capacity());
@@ -437,9 +574,12 @@ fn bench_random_mix(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_insert,
-    bench_update,
-    bench_delete,
-    bench_random_mix
+    bench_insert_worst,
+    bench_insert_best,
+    bench_insert_random,
+    // bench_delete,
+    // bench_update,
+    // bench_random_mix_half_update,
+    // bench_random_mix
 );
 criterion_main!(benches);
