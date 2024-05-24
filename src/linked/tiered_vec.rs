@@ -41,17 +41,8 @@ impl<T> LinkedTieredVec<T> {
             (trailing + 1) / 2
         };
 
-        let tier_size = capacity >> shift_count;
-        let mut tiers = Vec::with_capacity(tier_size);
-        for _ in 0..tier_size {
-            tiers.push(Tier::new(tier_size));
-        }
-
-        Self {
-            tiers,
-            tier_log: capacity.ilog2() as usize,
-            len: 0,
-        }
+        let tier_capacity = capacity >> shift_count;
+        Self::new(tier_capacity)
     }
 
     #[inline]
