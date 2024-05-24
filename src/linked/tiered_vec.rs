@@ -5,6 +5,7 @@ use super::tier::Tier;
 #[derive(Clone)]
 pub struct LinkedTieredVec<T> {
     tiers: Vec<Tier<T>>,
+    tier_log: usize,
     len: usize,
 }
 
@@ -18,7 +19,11 @@ impl<T> LinkedTieredVec<T> {
             tiers.push(Tier::new(tier_capacity));
         }
 
-        Self { tiers, len: 0 }
+        Self {
+            tiers,
+            tier_log: tier_capacity.ilog2() as usize,
+            len: 0,
+        }
     }
 
     pub fn with_capacity(mut capacity: usize) -> Self {
@@ -42,7 +47,11 @@ impl<T> LinkedTieredVec<T> {
             tiers.push(Tier::new(tier_size));
         }
 
-        Self { tiers, len: 0 }
+        Self {
+            tiers,
+            tier_log: capacity.ilog2() as usize,
+            len: 0,
+        }
     }
 
     #[inline]
@@ -71,7 +80,7 @@ impl<T> LinkedTieredVec<T> {
 
     #[inline]
     fn tier_index(&self, rank: usize) -> usize {
-        rank >> self.tier_capacity().ilog2()
+        rank >> self.tier_log
     }
 
     #[inline]
@@ -108,6 +117,8 @@ impl<T> LinkedTieredVec<T> {
         for _ in 0..(new_tier_size - (curr_tier_size / 2)) {
             self.tiers.push(Tier::new(new_tier_size));
         }
+
+        self.tier_log = new_tier_size.ilog2() as usize;
     }
 
     fn try_contract(&mut self, num_entries: usize) {
@@ -125,6 +136,7 @@ impl<T> LinkedTieredVec<T> {
                 self.tiers.insert(i + 1, half_tier);
             }
 
+            self.tier_log = new_tier_size.ilog2() as usize;
             assert_eq!(self.tiers.len(), new_tier_size);
         }
     }

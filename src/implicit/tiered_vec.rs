@@ -1,37 +1,41 @@
 use std::{fmt::Debug, mem::MaybeUninit};
 
-use crate::error::{TierError, TieredVectorError};
-
 use super::{tier::ImplicitTier, tier_ring_offsets::ImplicitTierRingOffsets};
 
 pub struct ImplicitTieredVec<T> {
     offsets: Vec<ImplicitTierRingOffsets>,
     buffer: Vec<MaybeUninit<T>>,
+    tier_log: usize,
+    len: usize,
 }
 
 impl<T> ImplicitTieredVec<T>
 where
     T: Clone + Debug,
 {
-    pub fn new(initial_tier_size: usize) -> Self {
-        assert!(initial_tier_size.is_power_of_two());
-        assert!(initial_tier_size.ge(&2));
+    pub fn new(tier_capacity: usize) -> Self {
+        assert!(tier_capacity.is_power_of_two());
+        assert!(tier_capacity.ge(&2));
 
-        let offsets = vec![ImplicitTierRingOffsets::default(); initial_tier_size];
+        let offsets = vec![ImplicitTierRingOffsets::default(); tier_capacity];
 
-        let capacity = initial_tier_size.pow(2);
+        let capacity = tier_capacity.pow(2);
         let mut buffer = Vec::with_capacity(capacity);
         unsafe {
             buffer.set_len(capacity);
         }
 
-        Self { offsets, buffer }
+        Self {
+            offsets,
+            buffer,
+            tier_log: tier_capacity.ilog2() as usize,
+            len: 0,
+        }
     }
 
-    pub fn with_minimum_capacity(min_capacity: usize) -> Self {
-        assert!(min_capacity.ge(&4));
+    pub fn with_minimum_capacity(mut capacity: usize) -> Self {
+        assert!(capacity.ge(&4));
 
-        let mut capacity = min_capacity;
         if !capacity.is_power_of_two() {
             capacity = capacity.next_power_of_two();
         }
@@ -44,16 +48,21 @@ where
             (trailing + 1) / 2
         };
 
-        let tier_size = capacity >> shift_count;
+        let tier_capacity = capacity >> shift_count;
 
-        let offsets = vec![ImplicitTierRingOffsets::default(); tier_size];
+        let offsets = vec![ImplicitTierRingOffsets::default(); tier_capacity];
 
         let mut buffer = Vec::with_capacity(capacity);
         unsafe {
             buffer.set_len(capacity);
         }
 
-        Self { offsets, buffer }
+        Self {
+            offsets,
+            buffer,
+            tier_log: tier_capacity.ilog2() as usize,
+            len: 0,
+        }
     }
 
     #[inline]
@@ -61,21 +70,9 @@ where
         self.buffer.len()
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn len(&self) -> usize {
-        let mut l = 0;
-
-        for offset in self.offsets.iter() {
-            let offset_len = offset.len();
-
-            if offset_len == 0 {
-                break;
-            }
-
-            l += offset_len;
-        }
-
-        return l;
+        self.len
     }
 
     #[inline]
@@ -99,208 +96,140 @@ where
     }
 
     #[inline]
-    pub fn tier_size(&self) -> usize {
+    pub fn tier_capacity(&self) -> usize {
         self.num_tiers()
     }
 
     #[inline]
-    fn tier_idx(&self, rank: usize) -> usize {
-        rank / self.tier_size()
+    fn tier_index(&self, rank: usize) -> usize {
+        rank >> self.tier_log
+    }
+
+    #[inline]
+    fn tier_buffer_index(&self, tier_index: usize) -> usize {
+        tier_index << self.tier_log
     }
 
     pub fn get_by_rank(&self, rank: usize) -> Option<&T> {
-        let tier_idx = self.tier_idx(rank);
+        let tier_index = self.tier_index(rank);
 
-        let num_tiers = self.num_tiers();
-        let start_idx = tier_idx * num_tiers;
-        let end_idx = start_idx + num_tiers;
+        let start_index = self.tier_buffer_index(tier_index);
+        let end_index = start_index + self.tier_capacity();
 
-        let tier = &self.buffer[start_idx..end_idx];
-        let ring_offsets = &self.offsets[tier_idx];
+        let tier = &self.buffer[start_index..end_index];
+        let ring_offsets = &self.offsets[tier_index];
         ImplicitTier::get_by_rank(tier, ring_offsets, rank)
     }
 
     pub fn get_mut_by_rank(&mut self, rank: usize) -> Option<&mut T> {
-        let tier_size = self.tier_size();
-        let tier_idx = self.tier_idx(rank);
+        let tier_index = self.tier_index(rank);
 
-        let ring_offsets = &self.offsets[tier_idx];
-        let tier = &mut self.buffer[tier_idx..tier_idx + tier_size];
+        let start_index = self.tier_buffer_index(tier_index);
+        let end_index = start_index + self.tier_capacity();
+
+        let ring_offsets = &self.offsets[tier_index];
+        let tier = &mut self.buffer[start_index..end_index];
 
         ImplicitTier::get_mut_by_rank(tier, ring_offsets, rank)
     }
 
     fn expand(&mut self) {
-        let curr_tier_size = self.tier_size();
-        let new_tier_size = curr_tier_size << 1;
+        let curr_tier_capacity = self.tier_capacity();
+        let new_tier_capacity = curr_tier_capacity << 1;
 
-        for i in 0..(curr_tier_size / 2) {
+        for i in 0..(curr_tier_capacity / 2) {
             let mut second_ring_offsets = self.offsets.remove(i + 1);
 
-            let start_idx = i * curr_tier_size;
-            let end_idx = start_idx + (curr_tier_size * 2);
+            let start_index = i * curr_tier_capacity;
+            let end_index = start_index + (curr_tier_capacity * 2);
             ImplicitTier::merge_neighbors(
-                &mut self.buffer[start_idx..end_idx],
+                &mut self.buffer[start_index..end_index],
                 &mut self.offsets[i],
                 &mut second_ring_offsets,
             );
         }
 
-        for _ in 0..(new_tier_size - (curr_tier_size / 2)) {
+        for _ in 0..(new_tier_capacity - (curr_tier_capacity / 2)) {
             self.offsets.push(Default::default());
         }
         self.buffer
-            .resize_with(new_tier_size.pow(2), MaybeUninit::uninit);
+            .resize_with(new_tier_capacity.pow(2), MaybeUninit::uninit);
     }
 
-    fn try_contract(&mut self, num_entries: usize) {
-        // only contract well below capacity to cull repeated alloc/free of memory upon reinsertion/redeletion
-        if num_entries < self.capacity() / 8 {
-            let curr_tier_size = self.tier_size();
-            let new_tier_size = curr_tier_size >> 1;
+    pub fn insert(&mut self, index: usize, elem: T) {
+        assert!(index <= self.len());
 
-            let split_idx = new_tier_size >> 1;
-            let _ = self.offsets.split_off(split_idx);
-
-            let end_idx = new_tier_size;
-            for i in (0..end_idx).step_by(2) {
-                let old_start_idx = i * curr_tier_size;
-                let old_end_idx = old_start_idx + curr_tier_size;
-                let old_tier = &mut self.buffer[old_start_idx..old_end_idx];
-                let old_ring_offsets = &mut self.offsets[i];
-
-                let new_ring_offsets = ImplicitTier::split_half(old_tier, old_ring_offsets);
-                self.offsets.insert(i + 1, new_ring_offsets);
-            }
-
-            let _ = self.buffer.split_off(split_idx * curr_tier_size);
-
-            assert_eq!(self.offsets.len(), new_tier_size);
-        }
-    }
-
-    pub fn insert(&mut self, rank: usize, elem: T) -> Result<usize, TieredVectorError<T>> {
-        let num_entries = self.len();
-        if rank > num_entries {
-            return Err(TieredVectorError::TieredVectorOutofBoundsInsertionError(
-                rank, elem,
-            ));
-        }
-
-        if num_entries == self.capacity() {
+        if self.is_full() {
             self.expand();
         }
 
-        let offset_idx = self.tier_idx(rank);
-        let tier_size = self.tier_size();
-        let mut prev_popped = None;
+        let tier_capacity = self.tier_capacity();
+        let offset_index = self.tier_index(index);
+        let start_index = self.tier_buffer_index(offset_index);
+        let end_index = start_index + self.tier_capacity();
 
-        // pop-push phase
-        if self.offsets[offset_idx].is_full(tier_size) {
-            for i in offset_idx..tier_size {
-                let start_idx = i * tier_size;
-                let end_idx = start_idx + tier_size;
-                let tier = &mut self.buffer[start_idx..end_idx];
-                let ring_offsets = &mut self.offsets[i];
+        if !self.offsets[offset_index].is_full(self.tier_capacity()) {
+            ImplicitTier::insert(
+                &mut self.buffer[start_index..end_index],
+                &mut self.offsets[offset_index],
+                index,
+                elem,
+            );
+            self.len += 1;
 
-                if ring_offsets.is_full(tier.len()) {
-                    if let Ok(popped) = ImplicitTier::pop_front(tier, ring_offsets) {
-                        if let Some(prev_elem) = prev_popped {
-                            ImplicitTier::push_back(tier, ring_offsets, prev_elem).expect(
-                                "tier did not have space despite prior call to `pop_front`",
-                            );
-                        }
-
-                        prev_popped = Some(popped);
-                    }
-                } else {
-                    if let Some(prev_elem) = prev_popped.take() {
-                        ImplicitTier::push_back(tier, ring_offsets, prev_elem)
-                            .expect("tier did not have space despite prior call to `pop_front`");
-                    }
-                }
-            }
+            return;
         }
 
-        // shift phase
-        let tier_idx = offset_idx * tier_size;
-        let tier_idx_end = tier_idx + tier_size;
+        let last_tier_index = self.tier_index(self.len() - 1);
 
-        let tier = &mut self.buffer[tier_idx..tier_idx_end];
-        let ring_offsets = &mut self.offsets[offset_idx];
-        ImplicitTier::insert(tier, ring_offsets, rank, elem)
-            .expect("could not insert into tier at rank");
+        let mut start_index = self.tier_buffer_index(offset_index);
+        let mut tier = &mut self.buffer[start_index..start_index + tier_capacity];
+        let mut ring_offsets = &mut self.offsets[offset_index];
 
-        Ok(rank)
-    }
+        let mut prev_popped = Some(ImplicitTier::pop_back(tier, ring_offsets));
+        ImplicitTier::insert(tier, ring_offsets, index, elem);
 
-    pub fn remove(&mut self, rank: usize) -> Result<T, TieredVectorError<T>> {
-        let num_entries = self.len();
-        if rank > num_entries {
-            return Err(TieredVectorError::TieredVectorRankOutOfBoundsError(rank));
+        for i in offset_index + 1..last_tier_index {
+            start_index = self.tier_buffer_index(i);
+            tier = &mut self.buffer[start_index..start_index + tier_capacity];
+            ring_offsets = &mut self.offsets[i];
+
+            let prev_elem = prev_popped.take().expect("loop should always pop a value");
+            prev_popped = Some(ImplicitTier::pop_push_front(tier, ring_offsets, prev_elem));
         }
 
-        self.try_contract(num_entries);
+        start_index = self.tier_buffer_index(last_tier_index);
+        tier = &mut self.buffer[start_index..start_index + tier_capacity];
+        ring_offsets = &mut self.offsets[last_tier_index];
 
-        let mut prev_popped = None;
+        if ring_offsets.is_full(tier_capacity) {
+            let prev_elem = prev_popped.take().expect("loop should always pop a value");
+            prev_popped = Some(ImplicitTier::pop_push_front(tier, ring_offsets, prev_elem));
 
-        // shift phase
-        let offset_idx = self.tier_idx(rank);
-
-        let tier_size = self.tier_size();
-        let tier_idx = offset_idx * tier_size;
-        let tier_idx_end = tier_idx + tier_size;
-
-        let target_tier = &mut self.buffer[tier_idx..tier_idx_end];
-        let target_ring_offsets = &mut self.offsets[offset_idx];
-
-        match ImplicitTier::remove(target_tier, target_ring_offsets, rank) {
-            Err(TierError::TierEmptyError) => Err(TieredVectorError::TieredVectorEmptyError),
-            Err(TierError::TierRankOutOfBoundsError(r)) => {
-                Err(TieredVectorError::TieredVectorRankOutOfBoundsError(r))
-            }
-            Err(_) => unreachable!(),
-
-            Ok(removed) => {
-                let last_tier_idx = self.tier_idx(num_entries);
-
-                // pop-push phase
-                for i in (offset_idx + 1..last_tier_idx + 1).rev() {
-                    let start_idx = i * tier_size;
-                    let end_idx = start_idx + tier_size;
-
-                    let tier = &mut self.buffer[start_idx..end_idx];
-                    let ring_offsets = &mut self.offsets[i];
-
-                    if let Ok(popped) = ImplicitTier::pop_front(tier, ring_offsets) {
-                        if let Some(prev_elem) = prev_popped {
-                            ImplicitTier::push_back(tier, ring_offsets, prev_elem)
-                                .expect("tier did not have space despite prior call to `pop_back`");
-                        }
-
-                        prev_popped = Some(popped);
-                    }
-                }
-
-                if let Some(popped) = prev_popped {
-                    let target_tier = &mut self.buffer[tier_idx..tier_idx_end];
-                    let target_ring_offsets = &mut self.offsets[offset_idx];
-
-                    ImplicitTier::push_back(target_tier, target_ring_offsets, popped)
-                        .expect("tier did not have space despite prior removal");
-                }
-
-                Ok(removed)
-            }
+            start_index = self.tier_buffer_index(last_tier_index + 1);
+            tier = &mut self.buffer[start_index..start_index + tier_capacity];
+            ring_offsets = &mut self.offsets[last_tier_index + 1];
         }
+
+        ImplicitTier::push_front(
+            tier,
+            ring_offsets,
+            prev_popped.take().expect("loop should always pop a value"),
+        );
+        self.len += 1;
     }
 }
 
-impl<T: Copy> Clone for ImplicitTieredVec<T> {
+impl<T> Clone for ImplicitTieredVec<T>
+where
+    T: Copy,
+{
     fn clone(&self) -> Self {
         Self {
             offsets: self.offsets.clone(),
             buffer: self.buffer.clone(),
+            tier_log: self.tier_log,
+            len: self.len,
         }
     }
 }
@@ -327,7 +256,7 @@ mod tests {
         let t: ImplicitTieredVec<usize> = ImplicitTieredVec::new(size);
         assert_eq!(t.len(), 0);
         assert_eq!(t.capacity(), size * size);
-        assert_eq!(t.tier_size(), size);
+        assert_eq!(t.tier_capacity(), size);
         assert!(t.is_empty());
         assert!(!t.is_full());
     }
@@ -336,25 +265,25 @@ mod tests {
     fn with_minimum_capacity() {
         let mut t: ImplicitTieredVec<usize> = ImplicitTieredVec::with_minimum_capacity(4);
         assert_eq!(4, t.capacity());
-        assert_eq!(2, t.tier_size());
+        assert_eq!(2, t.tier_capacity());
 
         t = ImplicitTieredVec::with_minimum_capacity(8);
         assert_eq!(16, t.capacity());
-        assert_eq!(4, t.tier_size());
+        assert_eq!(4, t.tier_capacity());
 
         t = ImplicitTieredVec::with_minimum_capacity(128);
         assert_eq!(256, t.capacity());
-        assert_eq!(16, t.tier_size());
+        assert_eq!(16, t.tier_capacity());
     }
 
     #[test]
     fn insert() {
         let size = 4;
         let mut t: ImplicitTieredVec<usize> = ImplicitTieredVec::new(size);
-        assert_eq!(t.tier_size(), size);
+        assert_eq!(t.tier_capacity(), size);
 
         for i in 0..size {
-            assert!(t.insert(i, i * 2).is_ok());
+            t.insert(i, i * 2);
             assert_eq!(t.len(), i + 1);
         }
 
@@ -375,15 +304,15 @@ mod tests {
         let mut t: ImplicitTieredVec<usize> = ImplicitTieredVec::new(size);
 
         for i in 0..size * size {
-            assert!(t.insert(i, i).is_ok());
+            t.insert(i, i);
             assert_eq!(*t.get_by_rank(i).unwrap(), i);
         }
-        assert_eq!(t.tier_size(), size);
+        assert_eq!(t.tier_capacity(), size);
         assert_eq!(t.len(), size * size);
         assert!(t.is_full());
 
-        assert!(t.insert(size * size, size * size).is_ok());
-        assert_eq!(t.tier_size(), size * 2);
+        t.insert(size * size, size * size);
+        assert_eq!(t.tier_capacity(), size * 2);
         assert_eq!(t.len(), (size * size) + 1);
         assert!(!t.is_full());
 
@@ -392,34 +321,5 @@ mod tests {
             assert!(result.is_some());
             assert_eq!(*result.unwrap(), i);
         }
-    }
-
-    #[test]
-    fn remove_and_contract() {
-        let size = 16;
-        let mut t: ImplicitTieredVec<usize> = ImplicitTieredVec::new(size);
-        assert_eq!(t.capacity(), size * size);
-
-        for i in 0..size * size / 8 {
-            // size / 8 {
-            assert!(t.insert(i, i).is_ok());
-            assert_eq!(*t.get_by_rank(i).unwrap(), i);
-        }
-        assert_eq!(t.tier_size(), size);
-        assert_eq!(t.len(), size * size / 8);
-        assert_eq!(t.capacity(), size * size);
-
-        assert!(t.remove(0).is_ok());
-
-        assert_eq!(*t.get_by_rank(0).unwrap(), 1);
-        assert_eq!(t.len(), (size * size / 8) - 1);
-        assert_eq!(t.capacity(), size * size);
-
-        // contract
-        assert!(t.remove(0).is_ok());
-
-        assert_eq!(*t.get_by_rank(0).unwrap(), 2);
-        assert_eq!(t.len(), (size * size / 8) - 2);
-        assert_eq!(t.capacity(), size * size / 4);
     }
 }

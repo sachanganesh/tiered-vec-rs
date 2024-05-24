@@ -10,6 +10,7 @@ use super::tier::Tier;
 pub struct FlatTieredVec<T> {
     ptr: *mut u8,
     tier_capacity: usize,
+    tier_log: usize,
     len: usize,
     marker: PhantomData<T>,
 }
@@ -27,6 +28,7 @@ impl<T> FlatTieredVec<T> {
         Self {
             ptr: buffer_ptr,
             tier_capacity,
+            tier_log: tier_capacity.ilog2() as usize,
             len: 0,
             marker: PhantomData,
         }
@@ -90,7 +92,7 @@ impl<T> FlatTieredVec<T> {
 
     #[inline]
     const fn tier_index(&self, rank: usize) -> usize {
-        rank >> self.num_tiers().ilog2()
+        rank >> self.tier_log
     }
 
     fn raw_tier_ptr_from_capacity(&self, index: usize, tier_capacity: usize) -> *mut Tier<T> {
@@ -370,6 +372,7 @@ where
         let mut cloned = Self {
             ptr: buffer_ptr,
             tier_capacity: self.tier_capacity(),
+            tier_log: self.tier_log,
             len: 0,
             marker: PhantomData,
         };
