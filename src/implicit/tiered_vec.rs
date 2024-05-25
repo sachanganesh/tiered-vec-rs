@@ -154,6 +154,8 @@ where
         }
         self.buffer
             .resize_with(new_tier_capacity.pow(2), MaybeUninit::uninit);
+
+        self.tier_log = new_tier_capacity.ilog2() as usize;
     }
 
     pub fn insert(&mut self, index: usize, elem: T) {

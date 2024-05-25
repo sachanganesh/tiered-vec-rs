@@ -34,10 +34,9 @@ impl<T> FlatTieredVec<T> {
         }
     }
 
-    pub fn with_capacity(minimum_capacity: usize) -> Self {
-        assert!(minimum_capacity.ge(&4));
+    pub fn with_capacity(mut capacity: usize) -> Self {
+        assert!(capacity.ge(&4));
 
-        let mut capacity = minimum_capacity;
         if !capacity.is_power_of_two() {
             capacity = capacity.next_power_of_two();
         }
@@ -91,7 +90,7 @@ impl<T> FlatTieredVec<T> {
     }
 
     #[inline]
-    const fn tier_index(&self, rank: usize) -> usize {
+    fn tier_index(&self, rank: usize) -> usize {
         rank >> self.tier_log
     }
 
@@ -106,20 +105,19 @@ impl<T> FlatTieredVec<T> {
         }
     }
 
+    #[inline]
     fn raw_tier_ptr(&self, index: usize) -> *mut Tier<T> {
         self.raw_tier_ptr_from_capacity(index, self.tier_capacity())
     }
 
     pub(crate) fn tier(&self, index: usize) -> &Tier<T> {
         let tier = unsafe { &*self.raw_tier_ptr(index) };
-        assert_eq!(self.tier_capacity(), tier.elements.len());
 
         return tier;
     }
 
     pub(crate) fn tier_mut(&mut self, index: usize) -> &mut Tier<T> {
         let tier = unsafe { &mut *self.raw_tier_ptr(index) };
-        assert_eq!(self.tier_capacity(), tier.elements.len());
 
         return tier;
     }
@@ -200,6 +198,7 @@ impl<T> FlatTieredVec<T> {
         // reallocate and assign new tier_capacity
         self.ptr = unsafe { realloc(self.ptr, curr_layout, new_layout.size()) };
         self.tier_capacity = new_tier_capacity;
+        self.tier_log = new_tier_capacity.ilog2() as usize;
 
         // remaining are new tiers to be cleared out
         for i in (curr_tier_capacity / 2)..new_tier_capacity {
@@ -283,7 +282,6 @@ impl<T> FlatTieredVec<T> {
         }
 
         let tier = self.tier_mut(self.tier_index(self.len()));
-        assert!(!tier.is_full());
 
         tier.push_back(elem);
         self.len += 1;
@@ -293,8 +291,6 @@ impl<T> FlatTieredVec<T> {
         assert!(!self.is_empty());
 
         let tier = self.tier_mut(self.tier_index(self.len() - 1));
-        assert!(!tier.is_empty());
-
         let elem = tier.pop_back();
 
         self.len -= 1;
