@@ -161,13 +161,17 @@ impl<T> LinkedTieredVec<T> {
             prev_popped = Some(tier.pop_push_front(prev_elem));
         }
 
-        tier = &mut self.tiers[last_tier_index];
-
-        if tier.is_full() {
-            let prev_elem = prev_popped.take().expect("loop should always pop a value");
-            prev_popped = Some(tier.pop_push_front(prev_elem));
-
+        if tier_index == last_tier_index {
             tier = &mut self.tiers[last_tier_index + 1];
+        } else {
+            tier = &mut self.tiers[last_tier_index];
+
+            if tier.is_full() {
+                let prev_elem = prev_popped.take().expect("loop should always pop a value");
+                prev_popped = Some(tier.pop_push_front(prev_elem));
+
+                tier = &mut self.tiers[last_tier_index + 1];
+            }
         }
 
         tier.push_front(prev_popped.take().expect("loop should always pop a value"));
@@ -333,6 +337,22 @@ mod tests {
             let result = t.get(i);
             assert!(result.is_some());
             assert_eq!(*result.unwrap(), i);
+            assert_eq!(t[i], i);
+        }
+    }
+
+    #[test]
+    fn expand_2() {
+        let size = 4;
+        let mut t: LinkedTieredVec<usize> = LinkedTieredVec::new(size);
+
+        for i in 0..1_000 {
+            t.insert(0, i);
+            assert_eq!(t[0], i);
+
+            for j in 1..t.len() {
+                assert_eq!(t[j], i - j);
+            }
         }
     }
 

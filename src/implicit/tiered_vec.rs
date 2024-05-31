@@ -1,4 +1,8 @@
-use std::{fmt::Debug, mem::MaybeUninit};
+use std::{
+    fmt::Debug,
+    mem::MaybeUninit,
+    ops::{Index, IndexMut},
+};
 
 use super::{tier::ImplicitTier, tier_ring_offsets::ImplicitTierRingOffsets};
 
@@ -11,7 +15,7 @@ pub struct ImplicitTieredVec<T> {
 
 impl<T> ImplicitTieredVec<T>
 where
-    T: Clone + Debug,
+    T: Debug,
 {
     pub fn new(tier_capacity: usize) -> Self {
         assert!(tier_capacity.is_power_of_two());
@@ -155,7 +159,7 @@ where
         self.buffer
             .resize_with(new_tier_capacity.pow(2), MaybeUninit::uninit);
 
-        self.tier_log = new_tier_capacity.ilog2() as usize;
+        self.tier_log = new_tier_capacity.ilog2() as usize; // @todo
     }
 
     pub fn insert(&mut self, index: usize, elem: T) {
@@ -189,7 +193,15 @@ where
         let mut ring_offsets = &mut self.offsets[offset_index];
 
         let mut prev_popped = Some(ImplicitTier::pop_back(tier, ring_offsets));
-        ImplicitTier::insert(tier, ring_offsets, index, elem);
+        ImplicitTier::insert(tier, ring_offsets, index, elem); // @todo return a value if full
+
+        // if not inserting into head of target_tier (shift only happens at the target or if the last)
+        //      optional_elem = shift()
+        // increment len
+        //      
+        // for target_tier to last_tier:
+        //      pop_push_front
+        //
 
         for i in offset_index + 1..last_tier_index {
             start_index = self.tier_buffer_index(i);
@@ -200,17 +212,23 @@ where
             prev_popped = Some(ImplicitTier::pop_push_front(tier, ring_offsets, prev_elem));
         }
 
-        start_index = self.tier_buffer_index(last_tier_index);
-        tier = &mut self.buffer[start_index..start_index + tier_capacity];
-        ring_offsets = &mut self.offsets[last_tier_index];
-
-        if ring_offsets.is_full(tier_capacity) {
-            let prev_elem = prev_popped.take().expect("loop should always pop a value");
-            prev_popped = Some(ImplicitTier::pop_push_front(tier, ring_offsets, prev_elem));
-
+        if offset_index == last_tier_index {
             start_index = self.tier_buffer_index(last_tier_index + 1);
             tier = &mut self.buffer[start_index..start_index + tier_capacity];
             ring_offsets = &mut self.offsets[last_tier_index + 1];
+        } else {
+            start_index = self.tier_buffer_index(last_tier_index);
+            tier = &mut self.buffer[start_index..start_index + tier_capacity];
+            ring_offsets = &mut self.offsets[last_tier_index];
+
+            if ring_offsets.is_full(tier_capacity) {
+                let prev_elem = prev_popped.take().expect("loop should always pop a value");
+                prev_popped = Some(ImplicitTier::pop_push_front(tier, ring_offsets, prev_elem));
+
+                start_index = self.tier_buffer_index(last_tier_index + 1);
+                tier = &mut self.buffer[start_index..start_index + tier_capacity];
+                ring_offsets = &mut self.offsets[last_tier_index + 1];
+            }
         }
 
         ImplicitTier::push_front(
@@ -219,6 +237,42 @@ where
             prev_popped.take().expect("loop should always pop a value"),
         );
         self.len += 1;
+    }
+}
+
+impl<T> Index<usize> for ImplicitTieredVec<T>
+where
+    T: Debug,
+{
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        assert!(index < self.len());
+
+        let offset_index = self.tier_index(index);
+        let offsets = &self.offsets[offset_index];
+
+        let masked_index = offsets.masked_rank(index, self.tier_capacity());
+        let buffer_index = self.tier_buffer_index(offset_index) + masked_index;
+
+        unsafe { self.buffer[buffer_index].assume_init_ref() }
+    }
+}
+
+impl<T> IndexMut<usize> for ImplicitTieredVec<T>
+where
+    T: Debug,
+{
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        assert!(index < self.len());
+
+        let offset_index = self.tier_index(index);
+        let offsets = &self.offsets[offset_index];
+
+        let masked_index = offsets.masked_rank(index, self.tier_capacity());
+        let buffer_index = self.tier_buffer_index(offset_index) + masked_index;
+
+        unsafe { self.buffer[buffer_index].assume_init_mut() }
     }
 }
 
@@ -322,6 +376,22 @@ mod tests {
             let result = t.get_by_rank(i);
             assert!(result.is_some());
             assert_eq!(*result.unwrap(), i);
+            assert_eq!(t[i], i);
+        }
+    }
+
+    #[test]
+    fn expand_2() {
+        let size = 4;
+        let mut t: ImplicitTieredVec<usize> = ImplicitTieredVec::new(size);
+
+        for i in 0..1_000 {
+            t.insert(0, i);
+            assert_eq!(t[0], i);
+
+            for j in 1..t.len() {
+                assert_eq!(t[j], i - j);
+            }
         }
     }
 }

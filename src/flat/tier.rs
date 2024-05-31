@@ -218,7 +218,7 @@ impl<T> Tier<T> {
     pub fn pop_push_back(&mut self, elem: T) -> T {
         assert!(self.is_full());
 
-        let index = self.masked_tail();
+        let index = self.masked_head();
         self.head_forward();
         self.tail_forward();
 

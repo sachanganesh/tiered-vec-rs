@@ -235,13 +235,17 @@ impl<T> FlatTieredVec<T> {
             prev_popped = Some(tier.pop_push_front(prev_elem));
         }
 
-        tier = self.tier_mut(last_tier_index);
-
-        if tier.is_full() {
-            let prev_elem = prev_popped.take().expect("loop should always pop a value");
-            prev_popped = Some(tier.pop_push_front(prev_elem));
-
+        if tier_index == last_tier_index {
             tier = self.tier_mut(last_tier_index + 1);
+        } else {
+            tier = self.tier_mut(last_tier_index);
+
+            if tier.is_full() {
+                let prev_elem = prev_popped.take().expect("loop should always pop a value");
+                prev_popped = Some(tier.pop_push_front(prev_elem));
+
+                tier = self.tier_mut(last_tier_index + 1);
+            }
         }
 
         tier.push_front(prev_popped.take().expect("loop should always pop a value"));

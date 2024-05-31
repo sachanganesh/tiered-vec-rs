@@ -205,7 +205,7 @@ impl<T> Tier<T> {
     pub fn pop_push_back(&mut self, elem: T) -> T {
         assert!(self.is_full());
 
-        let index = self.masked_tail();
+        let index = self.masked_head();
         self.head_forward();
         self.tail_forward();
 
@@ -316,6 +316,8 @@ impl<T> Tier<T> {
     }
 
     pub fn merge(&mut self, mut other: Tier<T>) {
+        self.rotate_reset();
+
         self.elements.reserve_exact(other.capacity());
         unsafe {
             self.elements.set_len(self.elements.capacity());
@@ -495,6 +497,82 @@ mod tests {
         assert_eq!(*t.get(1).unwrap(), 1);
         assert_eq!(*t.get(2).unwrap(), 2);
         assert_eq!(*t.get(3).unwrap(), 3);
+    }
+
+    #[test]
+    fn pop_push_front() {
+        let mut t = Tier::new(4);
+
+        // [0, 1, 2, 3]
+        t.push_back(0);
+        t.push_back(1);
+        t.push_back(2);
+        t.push_back(3);
+        assert_eq!(t.masked_head(), 0);
+        assert_eq!(t.masked_tail(), 0);
+
+        // [0, 1, 2, 4]
+        t.pop_push_front(4);
+        assert_eq!(t.masked_head(), 3);
+        assert_eq!(t.masked_tail(), 3);
+
+        // [0, 1, 5, 4]
+        t.pop_push_front(5);
+        assert_eq!(t.masked_head(), 2);
+        assert_eq!(t.masked_tail(), 2);
+
+        // [0, 6, 5, 4]
+        t.pop_push_front(6);
+        assert_eq!(t.masked_head(), 1);
+        assert_eq!(t.masked_tail(), 1);
+
+        // [7, 6, 5, 4]
+        t.pop_push_front(7);
+        assert_eq!(t.masked_head(), 0);
+        assert_eq!(t.masked_tail(), 0);
+
+        // [7, 6, 5, 8]
+        t.pop_push_front(8);
+        assert_eq!(t.masked_head(), 3);
+        assert_eq!(t.masked_tail(), 3);
+    }
+
+    #[test]
+    fn pop_push_back() {
+        let mut t = Tier::new(4);
+
+        // [0, 1, 2, 3]
+        t.push_back(0);
+        t.push_back(1);
+        t.push_back(2);
+        t.push_back(3);
+        assert_eq!(t.masked_head(), 0);
+        assert_eq!(t.masked_tail(), 0);
+
+        // [4, 1, 2, 3]
+        t.pop_push_back(4);
+        assert_eq!(t.masked_head(), 1);
+        assert_eq!(t.masked_tail(), 1);
+
+        // [4, 5, 2, 3]
+        t.pop_push_back(5);
+        assert_eq!(t.masked_head(), 2);
+        assert_eq!(t.masked_tail(), 2);
+
+        // [4, 5, 6, 3]
+        t.pop_push_back(6);
+        assert_eq!(t.masked_head(), 3);
+        assert_eq!(t.masked_tail(), 3);
+
+        // [4, 5, 6, 7]
+        t.pop_push_back(7);
+        assert_eq!(t.masked_head(), 0);
+        assert_eq!(t.masked_tail(), 0);
+
+        // [8, 5, 6, 7]
+        t.pop_push_back(8);
+        assert_eq!(t.masked_head(), 1);
+        assert_eq!(t.masked_tail(), 1);
     }
 
     #[test]
